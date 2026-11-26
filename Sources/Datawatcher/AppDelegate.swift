@@ -9,6 +9,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var cancellables = Set<AnyCancellable>()
+    private var lastStatusRenderKey: String?
+
+    private lazy var statusIconImage: NSImage? = {
+        let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
+            .applying(.preferringMonochrome())
+        let image = NSImage(systemSymbolName: "arrow.up.arrow.down.circle.fill", accessibilityDescription: "Datawatcher")?
+            .withSymbolConfiguration(config)
+        image?.isTemplate = true
+        return image
+    }()
+
+    private let stackedSpeedFont = NSFont.monospacedDigitSystemFont(ofSize: 9.0, weight: .medium)
 
     private var monitor: NetworkMonitor!
     private var viewModel: DashboardViewModel!
@@ -90,9 +102,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = item.button {
-            let image = NSImage(systemSymbolName: "arrow.up.arrow.down.circle.fill", accessibilityDescription: "Datawatcher")
-            image?.isTemplate = true
-            button.image = image
+            button.image = statusIconImage
             button.imagePosition = .imageLeading
             button.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .medium)
             button.target = self
@@ -135,17 +145,82 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func updateStatusItemTitle(inSpeed: Double, outSpeed: Double, showSpeed: Bool, isPaused: Bool) {
         guard let button = statusItem?.button else { return }
+        let renderKey: String
         if !showSpeed {
+            renderKey = "icon-only"
+            guard renderKey != lastStatusRenderKey else { return }
+            button.image = statusIconImage
+            button.imagePosition = .imageOnly
             button.title = ""
-            return
-        }
-        if isPaused {
+        } else if isPaused {
+            renderKey = "paused"
+            guard renderKey != lastStatusRenderKey else { return }
+            button.image = statusIconImage
+            button.imagePosition = .imageLeading
             button.title = " ❚❚"
-            return
+        } else {
+            let up = ByteFormatter.formatMenuBarSpeed(outSpeed)
+            let down = ByteFormatter.formatMenuBarSpeed(inSpeed)
+            renderKey = "speed:\(up)|\(down)"
+            guard renderKey != lastStatusRenderKey else { return }
+            button.image = makeStackedSpeedImage(up: up, down: down)
+            button.imagePosition = .imageOnly
+            button.title = ""
         }
-        let down = ByteFormatter.formatCompactSpeed(inSpeed)
-        let up = ByteFormatter.formatCompactSpeed(outSpeed)
-        button.title = " ↓\(down) ↑\(up)"
+        lastStatusRenderKey = renderKey
+    }
+
+    private func makeStackedSpeedImage(up: String, down: String) -> NSImage {
+        let barHeight: CGFloat = NSStatusBar.system.thickness > 0 ? NSStatusBar.system.thickness : 22.0
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: stackedSpeedFont,
+            .foregroundColor: NSColor.black
+        ]
+
+        let minValueWidth = ("999 KB/s" as NSString).size(withAttributes: attrs).width
+        let upValueSize = (up as NSString).size(withAttributes: attrs)
+        let downValueSize = (down as NSString).size(withAttributes: attrs)
+        let valueColumnWidth = ceil(max(minValueWidth, max(upValueSize.width, downValueSize.width)))
+
+        let icon = statusIconImage
+        let iconSize = icon?.size ?? .zero
+        let iconTextSpacing: CGFloat = iconSize.width > 0 ? 4.0 : 0.0
+        let textX = iconSize.width + iconTextSpacing
+        let valueRightX = textX + valueColumnWidth
+        let totalWidth = ceil(valueRightX)
+
+        let capHeight = stackedSpeedFont.capHeight
+        let lineGap: CGFloat = 2.5
+        let totalVisualHeight = 2 * capHeight + lineGap
+        let bottomBaselineY = (barHeight - totalVisualHeight) / 2.0
+        let topBaselineY = bottomBaselineY + capHeight + lineGap
+        let bottomDrawY = bottomBaselineY + stackedSpeedFont.descender
+        let topDrawY = topBaselineY + stackedSpeedFont.descender
+
+        let image = NSImage(size: NSSize(width: totalWidth, height: barHeight), flipped: false) { _ in
+            if let icon {
+                icon.draw(
+                    in: NSRect(
+                        x: 0,
+                        y: (barHeight - iconSize.height) / 2.0,
+                        width: iconSize.width,
+                        height: iconSize.height
+                    ),
+                    from: .zero,
+                    operation: .sourceOver,
+                    fraction: 1.0
+                )
+            }
+
+            (up as NSString).draw(at: NSPoint(x: valueRightX - upValueSize.width, y: topDrawY), withAttributes: attrs)
+            (down as NSString).draw(at: NSPoint(x: valueRightX - downValueSize.width, y: bottomDrawY), withAttributes: attrs)
+
+            return true
+        }
+
+        image.isTemplate = true
+        image.accessibilityDescription = "Datawatcher ↑ \(up) ↓ \(down)"
+        return image
     }
 
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {

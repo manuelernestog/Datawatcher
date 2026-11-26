@@ -159,6 +159,15 @@ struct DatawatcherTests {
         #expect(ByteFormatter.formatSpeed(2048) == "2.00 KB/s")
         #expect(ByteFormatter.formatCompactSpeed(0) == "0B")
         #expect(ByteFormatter.formatCompactSpeed(1_572_864) == "1.5M")
+
+        #expect(ByteFormatter.formatMenuBarSpeed(0) == "0 KB/s")
+        #expect(ByteFormatter.formatMenuBarSpeed(200) == "0 KB/s")
+        #expect(ByteFormatter.formatMenuBarSpeed(512) == "1 KB/s")
+        #expect(ByteFormatter.formatMenuBarSpeed(1024) == "1 KB/s")
+        #expect(ByteFormatter.formatMenuBarSpeed(15_360) == "15 KB/s")
+        #expect(ByteFormatter.formatMenuBarSpeed(1_048_575) == "1.0 MB/s")
+        #expect(ByteFormatter.formatMenuBarSpeed(1_572_864) == "1.5 MB/s")
+        #expect(ByteFormatter.formatMenuBarSpeed(125_829_120) == "120 MB/s")
     }
 
     @Test("All localization keys have non-empty English and Spanish strings")
