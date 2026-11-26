@@ -6,11 +6,16 @@ import DatawatcherCore
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private static let mainWindowFrameAutosaveName = NSWindow.FrameAutosaveName("DatawatcherMainWindowFrame")
+    private static let mainWindowFullScreenKey = "datawatcher.mainWindowFullScreen"
+
     private var mainWindow: NSWindow?
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var cancellables = Set<AnyCancellable>()
     private var lastStatusRenderKey: String?
+    private var pendingRestoreFullScreen: Bool = false
+    private var hideAfterExitingFullScreen: Bool = false
 
     private lazy var statusIconImage: NSImage? = {
         let config = NSImage.SymbolConfiguration(pointSize: 14, weight: .regular)
@@ -69,6 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     func applicationWillTerminate(_ notification: Notification) {
+        persistMainWindowFrame(mainWindow)
         monitor?.stop()
     }
 
@@ -84,6 +90,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .environmentObject(l10n)
 
         let hostingController = NSHostingController(rootView: rootView)
+        hostingController.sizingOptions = []
+
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1120, height: 740),
             styleMask: [.titled, .closable, .miniaturizable, .resizable],
@@ -95,8 +103,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.contentViewController = hostingController
         window.isReleasedWhenClosed = false
         window.delegate = self
-        window.center()
 
+        let restored = window.setFrameUsingName(Self.mainWindowFrameAutosaveName)
+        if !restored {
+            window.setContentSize(NSSize(width: 1120, height: 740))
+            window.center()
+        }
+        window.setFrameAutosaveName(Self.mainWindowFrameAutosaveName)
+
+        pendingRestoreFullScreen = UserDefaults.standard.bool(forKey: Self.mainWindowFullScreenKey)
         self.mainWindow = window
     }
 
@@ -108,13 +123,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         mainWindow?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+        if pendingRestoreFullScreen {
+            pendingRestoreFullScreen = false
+            if let window = mainWindow, !window.styleMask.contains(.fullScreen) {
+                window.toggleFullScreen(nil)
+            }
+        }
         viewModel.reloadData()
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
+        persistMainWindowFrame(sender)
+        if sender.styleMask.contains(.fullScreen) {
+            hideAfterExitingFullScreen = true
+            sender.toggleFullScreen(nil)
+            return false
+        }
         sender.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
         return false
+    }
+
+    func windowDidEndLiveResize(_ notification: Notification) {
+        persistMainWindowFrame(notification.object as? NSWindow)
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        persistMainWindowFrame(notification.object as? NSWindow)
+    }
+
+    func windowDidEnterFullScreen(_ notification: Notification) {
+        UserDefaults.standard.set(true, forKey: Self.mainWindowFullScreenKey)
+    }
+
+    func windowDidExitFullScreen(_ notification: Notification) {
+        let window = notification.object as? NSWindow
+        if hideAfterExitingFullScreen {
+            hideAfterExitingFullScreen = false
+            window?.orderOut(nil)
+            NSApp.setActivationPolicy(.accessory)
+        } else {
+            UserDefaults.standard.set(false, forKey: Self.mainWindowFullScreenKey)
+            persistMainWindowFrame(window)
+        }
+    }
+
+    private func persistMainWindowFrame(_ window: NSWindow?) {
+        guard let window, !window.styleMask.contains(.fullScreen) else { return }
+        window.saveFrame(usingName: Self.mainWindowFrameAutosaveName)
     }
 
     // MARK: - Tray Icon (NSStatusItem + NSPopover + Context Menu)
