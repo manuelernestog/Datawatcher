@@ -16,7 +16,8 @@ let package = Package(
             name: "DatawatcherCore",
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
-                .linkedFramework("AppKit")
+                .linkedFramework("AppKit"),
+                .linkedFramework("SystemConfiguration")
             ]
         ),
         .executableTarget(

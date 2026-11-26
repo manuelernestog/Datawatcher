@@ -4,37 +4,141 @@ import Darwin
 
 /// Resolves running process IDs to their parent macOS application bundle and display metadata.
 public final class AppResolver: @unchecked Sendable {
+    private static let knownVPNTunnelNames: Set<String> = [
+        "openvpn",
+        "wireguard-go",
+        "wireguardnetworkextension",
+        "wireguardnetwor",
+        "tailscaled",
+        "mullvad-daemon",
+        "nordvpnd",
+        "warp-svc",
+        "cloudflare-warp",
+        "vpnagentd",
+        "openconnect",
+        "charon",
+        "pppd",
+        "sstpc",
+        "zerotier-one",
+        "nebula",
+        "sing-box",
+        "clash",
+        "mihomo"
+    ]
+
     private let lock = NSLock()
-    private var pidCache: [Int32: (record: AppRecord, resolvedAt: Date)] = [:]
-    private let cacheTTL: TimeInterval = 30.0
+    private var pidCache: [Int32: (record: AppRecord, isVPNTunnel: Bool, resolvedAt: Date)] = [:]
+    private var extensionVPNCheckCache: [String: Bool] = [:]
+    private let cacheTTL: TimeInterval = 60.0
 
     public init() {}
 
     /// Resolves a `(pid, fallbackName)` pair into a canonical `AppRecord`.
     /// Helper processes inside an `.app` bundle (e.g. Chrome Helper) are grouped under the outermost `.app`.
     public func resolve(pid: Int32, fallbackName: String) -> AppRecord {
+        resolveWithMetadata(pid: pid, fallbackName: fallbackName).record
+    }
+
+    /// Resolves a `(pid, fallbackName)` pair into a canonical `AppRecord` plus whether the process is
+    /// an L3 VPN tunnel provider/daemon whose traffic already duplicates app sockets on `utun*`.
+    public func resolveWithMetadata(pid: Int32, fallbackName: String) -> (record: AppRecord, isVPNTunnel: Bool) {
         let now = Date()
         lock.lock()
         if let cached = pidCache[pid], now.timeIntervalSince(cached.resolvedAt) < cacheTTL {
             lock.unlock()
-            return cached.record
+            return (cached.record, cached.isVPNTunnel)
         }
         lock.unlock()
 
-        let record = performResolve(pid: pid, fallbackName: fallbackName)
+        let resolved = performResolve(pid: pid, fallbackName: fallbackName)
 
         lock.lock()
-        pidCache[pid] = (record, now)
+        pidCache[pid] = (resolved.record, resolved.isVPNTunnel, now)
         if pidCache.count > 1024 {
             pidCache = pidCache.filter { now.timeIntervalSince($0.value.resolvedAt) < cacheTTL }
         }
         lock.unlock()
 
-        return record
+        return resolved
     }
 
-    private func performResolve(pid: Int32, fallbackName: String) -> AppRecord {
+    /// Determines whether an executable path or fallback process name belongs to a VPN packet-tunnel
+    /// extension or standalone tunnel daemon.
+    public func isVPNTunnelExecutable(executablePath: String?, fallbackName: String) -> Bool {
+        if let path = executablePath, let extURL = extensionBundleURL(fromExecutablePath: path) {
+            let extPath = extURL.path
+            lock.lock()
+            let cached = extensionVPNCheckCache[extPath]
+            lock.unlock()
+
+            if let cached {
+                if cached { return true }
+            } else {
+                let isTunnelExt = checkExtensionBundleIsVPNTunnel(extURL)
+                lock.lock()
+                extensionVPNCheckCache[extPath] = isTunnelExt
+                lock.unlock()
+                if isTunnelExt { return true }
+            }
+        }
+
+        let execBase = (executablePath as NSString?)?.lastPathComponent.lowercased() ?? ""
+        let cleanFallback = fallbackName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+
+        if !execBase.isEmpty && (Self.knownVPNTunnelNames.contains(execBase) || execBase.hasPrefix("wireguardnetwor")) {
+            return true
+        }
+        if !cleanFallback.isEmpty && (Self.knownVPNTunnelNames.contains(cleanFallback) || cleanFallback.hasPrefix("wireguardnetwor")) {
+            return true
+        }
+
+        return false
+    }
+
+    private func checkExtensionBundleIsVPNTunnel(_ extURL: URL) -> Bool {
+        let extFilename = extURL.lastPathComponent.lowercased()
+        if extFilename.contains("packettunnel") || extFilename.contains("wireguardnetworkextension") {
+            return true
+        }
+
+        guard let info = Bundle(url: extURL)?.infoDictionary else {
+            return false
+        }
+
+        if let nsExt = info["NSExtension"] as? [String: Any],
+           let pointId = nsExt["NSExtensionPointIdentifier"] as? String,
+           pointId.lowercased().contains("packet-tunnel") {
+            return true
+        }
+
+        if let neInfo = info["NetworkExtension"] as? [String: Any],
+           let providerClasses = neInfo["NEProviderClasses"] as? [String: Any],
+           providerClasses.keys.contains(where: { $0.lowercased().contains("packet-tunnel") }) {
+            return true
+        }
+
+        return false
+    }
+
+    private func extensionBundleURL(fromExecutablePath path: String) -> URL? {
+        let components = (path as NSString).pathComponents
+        guard !components.isEmpty else { return nil }
+
+        var accumulated: [String] = []
+        for component in components {
+            accumulated.append(component)
+            if (component.hasSuffix(".appex") && component != ".appex") ||
+               (component.hasSuffix(".systemextension") && component != ".systemextension") {
+                let joined = NSString.path(withComponents: accumulated)
+                return URL(fileURLWithPath: joined)
+            }
+        }
+        return nil
+    }
+
+    private func performResolve(pid: Int32, fallbackName: String) -> (record: AppRecord, isVPNTunnel: Bool) {
         let execPath = executablePath(for: pid)
+        let isVPNTunnel = isVPNTunnelExecutable(executablePath: execPath, fallbackName: fallbackName)
 
         if let execPath, let outerAppURL = outermostAppBundleURL(fromExecutablePath: execPath) {
             let bundle = Bundle(url: outerAppURL)
@@ -48,13 +152,14 @@ public final class AppResolver: @unchecked Sendable {
             let isSys = isSystemPath(appPath, hasAppBundle: true)
             let id = bundleId ?? appPath
 
-            return AppRecord(
+            let record = AppRecord(
                 id: id,
                 name: finalName,
                 bundleId: bundleId,
                 appPath: appPath,
                 isSystem: isSys
             )
+            return (record, isVPNTunnel)
         }
 
         if let runningApp = NSRunningApplication(processIdentifier: pid),
@@ -68,26 +173,28 @@ public final class AppResolver: @unchecked Sendable {
                 ?? outerURL.deletingPathExtension().lastPathComponent
             let appPath = outerURL.path
             let isSys = isSystemPath(appPath, hasAppBundle: true)
-            return AppRecord(
+            let record = AppRecord(
                 id: bundleId ?? appPath,
                 name: name,
                 bundleId: bundleId,
                 appPath: appPath,
                 isSystem: isSys
             )
+            return (record, isVPNTunnel)
         }
 
         let cleanFallback = fallbackName.trimmingCharacters(in: .whitespacesAndNewlines)
         let displayName = cleanFallback.isEmpty ? "pid-\(pid)" : cleanFallback
         let isSys = execPath.map { isSystemPath($0, hasAppBundle: false) } ?? true
 
-        return AppRecord(
+        let record = AppRecord(
             id: "proc:\(displayName)",
             name: displayName,
             bundleId: nil,
             appPath: execPath,
             isSystem: isSys
         )
+        return (record, isVPNTunnel)
     }
 
     private func executablePath(for pid: Int32) -> String? {

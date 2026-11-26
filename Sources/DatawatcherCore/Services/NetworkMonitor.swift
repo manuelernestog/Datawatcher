@@ -1,8 +1,10 @@
 import Foundation
 import Combine
+import AppKit
 
-/// Polls macOS `nettop` periodically, resolves processes to applications, records hourly
-/// usage deltas into `UsageDatabase`, and publishes real-time throughput metrics.
+/// Streams kernel-level per-process delta frames from a single persistent `nettop -P -d` process,
+/// samples active physical interface counters via `InterfaceBandwidthReader` (`sysctl`), resolves
+/// applications while excluding duplicate L3 VPN tunnel daemons, and persists hourly deltas to SQLite.
 @MainActor
 public final class NetworkMonitor: ObservableObject {
     public let database: UsageDatabase
@@ -16,18 +18,21 @@ public final class NetworkMonitor: ObservableObject {
     @Published public var isPaused: Bool = false {
         didSet {
             if isPaused != oldValue {
+                let state = pollState
                 if isPaused {
                     totalLiveInPerSec = 0
                     totalLiveOutPerSec = 0
                     liveSpeedsByApp = [:]
-                } else {
-                    let state = pollState
                     deltaQueue.async {
-                        state.deltaTracker.reset()
-                        state.lastSampleDate = nil
+                        Self.stopStreamLocked(state: state)
                     }
-                    restartTimer()
-                    triggerImmediatePoll()
+                } else {
+                    let db = database
+                    let appResolver = resolver
+                    deltaQueue.async { [weak self] in
+                        state.shouldRun = true
+                        Self.startStreamLocked(state: state, queue: self?.deltaQueue, db: db, appResolver: appResolver, monitor: self)
+                    }
                 }
             }
         }
@@ -36,7 +41,16 @@ public final class NetworkMonitor: ObservableObject {
     @Published public var pollIntervalSeconds: Double {
         didSet {
             UserDefaults.standard.set(pollIntervalSeconds, forKey: Self.pollIntervalKey)
-            restartTimer()
+            let newInterval = pollIntervalSeconds
+            let state = pollState
+            let db = database
+            let appResolver = resolver
+            deltaQueue.async { [weak self] in
+                state.intervalSeconds = newInterval
+                if state.shouldRun {
+                    Self.startStreamLocked(state: state, queue: self?.deltaQueue, db: db, appResolver: appResolver, monitor: self)
+                }
+            }
         }
     }
 
@@ -58,6 +72,12 @@ public final class NetworkMonitor: ObservableObject {
     @Published public var includeSystemByDefault: Bool {
         didSet {
             UserDefaults.standard.set(includeSystemByDefault, forKey: Self.includeSystemDefaultKey)
+            let includeSys = includeSystemByDefault
+            let state = pollState
+            deltaQueue.async {
+                state.includeSystem = includeSys
+                state.hasLoadedTodayStats = false
+            }
             refreshTodayStats()
         }
     }
@@ -72,21 +92,33 @@ public final class NetworkMonitor: ObservableObject {
     @Published public private(set) var lastUpdated: Date = Date()
 
     private final class PollState: @unchecked Sendable {
-        var deltaTracker = DeltaTracker()
-        var lastSampleDate: Date?
+        var streamProcess: Process?
+        var streamOutHandle: FileHandle?
+        var streamGeneration: UInt64 = 0
+        var shouldRun: Bool = false
+        var assembler = NettopStreamAssembler()
+        var interfaceReader = InterfaceBandwidthReader()
+        var lastFrameDate: Date?
+        var pendingFlushWorkItem: DispatchWorkItem?
+        var restartWorkItem: DispatchWorkItem?
+        var hasLoadedTodayStats: Bool = false
+        var cachedTopSummaries: [AppUsageSummary] = []
+        var cachedTodayTotals: (bytesIn: Int64, bytesOut: Int64) = (0, 0)
+        var includeSystem: Bool = true
+        var intervalSeconds: Double = 2.0
     }
 
     private let deltaQueue = DispatchQueue(label: "com.datawatcher.nettop", qos: .utility)
     private let pollState = PollState()
-    private var pollTimer: Timer?
-    private var isPolling: Bool = false
+    private var wakeObserver: NSObjectProtocol?
 
     public init(database: UsageDatabase, resolver: AppResolver = AppResolver()) {
         self.database = database
         self.resolver = resolver
 
         let savedInterval = UserDefaults.standard.double(forKey: Self.pollIntervalKey)
-        self.pollIntervalSeconds = savedInterval > 0 ? savedInterval : 2.0
+        let resolvedInterval = savedInterval > 0 ? savedInterval : 2.0
+        self.pollIntervalSeconds = resolvedInterval
 
         let initialShowSpeed: Bool
         if UserDefaults.standard.object(forKey: Self.showSpeedMenuBarKey) != nil {
@@ -102,27 +134,75 @@ public final class NetworkMonitor: ObservableObject {
             self.hideMenuBarIcon = false
         }
 
+        let initialIncludeSys: Bool
         if UserDefaults.standard.object(forKey: Self.includeSystemDefaultKey) != nil {
-            self.includeSystemByDefault = UserDefaults.standard.bool(forKey: Self.includeSystemDefaultKey)
+            initialIncludeSys = UserDefaults.standard.bool(forKey: Self.includeSystemDefaultKey)
         } else {
-            self.includeSystemByDefault = true
+            initialIncludeSys = true
         }
+        self.includeSystemByDefault = initialIncludeSys
+
+        self.pollState.intervalSeconds = resolvedInterval
+        self.pollState.includeSystem = initialIncludeSys
 
         refreshTodayStats()
     }
 
+    deinit {
+        pollState.streamOutHandle?.readabilityHandler = nil
+        if let proc = pollState.streamProcess, proc.isRunning {
+            proc.terminate()
+        }
+    }
+
     public func start() {
-        restartTimer()
-        triggerImmediatePoll()
+        if wakeObserver == nil {
+            wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didWakeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.handleSystemWake()
+                }
+            }
+        }
+
+        guard !isPaused else { return }
+        let state = pollState
+        let db = database
+        let appResolver = resolver
+        deltaQueue.async { [weak self] in
+            state.shouldRun = true
+            Self.startStreamLocked(state: state, queue: self?.deltaQueue, db: db, appResolver: appResolver, monitor: self)
+        }
     }
 
     public func stop() {
-        pollTimer?.invalidate()
-        pollTimer = nil
+        if let wakeObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wakeObserver)
+            self.wakeObserver = nil
+        }
+
+        let state = pollState
+        deltaQueue.sync {
+            Self.stopStreamLocked(state: state)
+        }
     }
 
     public func togglePause() {
         isPaused.toggle()
+    }
+
+    private func handleSystemWake() {
+        guard !isPaused else { return }
+        let state = pollState
+        let db = database
+        let appResolver = resolver
+        deltaQueue.async { [weak self] in
+            guard state.shouldRun else { return }
+            Self.startStreamLocked(state: state, queue: self?.deltaQueue, db: db, appResolver: appResolver, monitor: self)
+        }
     }
 
     public func refreshTodayStats() {
@@ -130,11 +210,16 @@ public final class NetworkMonitor: ObservableObject {
         let startOfDay = Calendar.current.startOfDay(for: now)
         let includeSys = includeSystemByDefault
         let db = database
+        let state = pollState
         let speeds = liveSpeedsByApp
 
-        DispatchQueue.global(qos: .utility).async { [weak self] in
+        deltaQueue.async { [weak self] in
             let totals = db.fetchTotals(from: startOfDay, to: now, appId: nil, includeSystem: includeSys)
             let summaries = db.fetchAppSummaries(from: startOfDay, to: now, includeSystem: includeSys)
+            state.cachedTodayTotals = totals
+            state.cachedTopSummaries = summaries
+            state.hasLoadedTodayStats = true
+
             let top5 = Array(summaries.prefix(5)).map { item -> AppUsageSummary in
                 let live = speeds[item.app.id] ?? (0, 0)
                 return AppUsageSummary(
@@ -155,130 +240,300 @@ public final class NetworkMonitor: ObservableObject {
         }
     }
 
-    private func restartTimer() {
-        pollTimer?.invalidate()
-        guard !isPaused else { return }
-        let interval = max(1.0, pollIntervalSeconds)
-        pollTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.triggerImmediatePoll()
+    // MARK: - Persistent Streaming Engine (deltaQueue only)
+
+    private nonisolated static func stopStreamLocked(state: PollState) {
+        state.shouldRun = false
+        state.streamGeneration &+= 1
+        state.pendingFlushWorkItem?.cancel()
+        state.pendingFlushWorkItem = nil
+        state.restartWorkItem?.cancel()
+        state.restartWorkItem = nil
+
+        state.streamOutHandle?.readabilityHandler = nil
+        state.streamOutHandle = nil
+
+        if let proc = state.streamProcess {
+            proc.terminationHandler = nil
+            if proc.isRunning {
+                proc.terminate()
+                proc.waitUntilExit()
+            }
+            state.streamProcess = nil
+        }
+
+        state.assembler.reset()
+        state.interfaceReader.reset()
+        state.lastFrameDate = nil
+    }
+
+    private nonisolated static func terminateExistingProcessLocked(state: PollState) {
+        state.streamGeneration &+= 1
+        state.pendingFlushWorkItem?.cancel()
+        state.pendingFlushWorkItem = nil
+        state.restartWorkItem?.cancel()
+        state.restartWorkItem = nil
+
+        state.streamOutHandle?.readabilityHandler = nil
+        state.streamOutHandle = nil
+
+        if let proc = state.streamProcess {
+            proc.terminationHandler = nil
+            if proc.isRunning {
+                proc.terminate()
+                proc.waitUntilExit()
+            }
+            state.streamProcess = nil
+        }
+
+        state.assembler.reset()
+        state.interfaceReader.reset()
+        state.lastFrameDate = nil
+    }
+
+    private nonisolated static func startStreamLocked(
+        state: PollState,
+        queue: DispatchQueue?,
+        db: UsageDatabase,
+        appResolver: AppResolver,
+        monitor: NetworkMonitor?
+    ) {
+        guard let queue else { return }
+        terminateExistingProcessLocked(state: state)
+        guard state.shouldRun else { return }
+
+        let generation = state.streamGeneration
+        let sampleInterval = max(1, Int(state.intervalSeconds.rounded()))
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
+        process.arguments = [
+            "-P", "-d", "-L", "0",
+            "-s", "\(sampleInterval)",
+            "-x", "-n",
+            "-J", "bytes_in,bytes_out",
+            "-t", "wifi", "-t", "wired"
+        ]
+
+        var env = ProcessInfo.processInfo.environment
+        env["NSUnbufferedIO"] = "YES"
+        env["LC_ALL"] = "en_US.UTF-8"
+        process.environment = env
+
+        process.standardInput = FileHandle.nullDevice
+        process.standardError = FileHandle.nullDevice
+
+        let outPipe = Pipe()
+        process.standardOutput = outPipe
+        let outHandle = outPipe.fileHandleForReading
+
+        state.streamProcess = process
+        state.streamOutHandle = outHandle
+
+        // Establish initial physical-interface baseline before the first delta frame arrives.
+        _ = state.interfaceReader.sample(at: Date())
+
+        outHandle.readabilityHandler = { [weak monitor] handle in
+            let data = handle.availableData
+            if data.isEmpty {
+                handle.readabilityHandler = nil
+                return
+            }
+
+            let chunk = String(data: data, encoding: .utf8) ?? String(decoding: data, as: UTF8.self)
+            queue.async {
+                guard generation == state.streamGeneration, state.shouldRun else { return }
+
+                let completedFrames = state.assembler.append(chunk)
+                if !completedFrames.isEmpty {
+                    state.pendingFlushWorkItem?.cancel()
+                    state.pendingFlushWorkItem = nil
+                    for frame in completedFrames {
+                        processDeltaFrameLocked(
+                            frame,
+                            generation: generation,
+                            state: state,
+                            db: db,
+                            appResolver: appResolver,
+                            monitor: monitor
+                        )
+                    }
+                }
+
+                // A frame's lines arrive in a quick burst; flush shortly after the burst settles
+                // so live speeds update immediately without waiting for the next interval's header.
+                state.pendingFlushWorkItem?.cancel()
+                let flushItem = DispatchWorkItem {
+                    guard generation == state.streamGeneration, state.shouldRun else { return }
+                    if let flushed = state.assembler.flushCurrentFrame() {
+                        processDeltaFrameLocked(
+                            flushed,
+                            generation: generation,
+                            state: state,
+                            db: db,
+                            appResolver: appResolver,
+                            monitor: monitor
+                        )
+                    }
+                }
+                state.pendingFlushWorkItem = flushItem
+                queue.asyncAfter(deadline: .now() + 0.06, execute: flushItem)
             }
         }
-        if let pollTimer {
-            RunLoop.main.add(pollTimer, forMode: .common)
+
+        process.terminationHandler = { [weak monitor] _ in
+            queue.async {
+                guard generation == state.streamGeneration, state.shouldRun else { return }
+                state.streamOutHandle?.readabilityHandler = nil
+                state.streamOutHandle = nil
+                state.streamProcess = nil
+
+                state.restartWorkItem?.cancel()
+                let restartItem = DispatchWorkItem {
+                    guard generation == state.streamGeneration, state.shouldRun else { return }
+                    startStreamLocked(state: state, queue: queue, db: db, appResolver: appResolver, monitor: monitor)
+                }
+                state.restartWorkItem = restartItem
+                queue.asyncAfter(deadline: .now() + 2.0, execute: restartItem)
+            }
+        }
+
+        do {
+            try process.run()
+        } catch {
+            outHandle.readabilityHandler = nil
+            state.streamOutHandle = nil
+            state.streamProcess = nil
         }
     }
 
-    private func triggerImmediatePoll() {
-        guard !isPaused, !isPolling else { return }
-        isPolling = true
-        let includeSys = includeSystemByDefault
-        let fallbackInterval = pollIntervalSeconds
-        let state = pollState
-        let db = database
-        let appResolver = resolver
+    private nonisolated static func processDeltaFrameLocked(
+        _ deltas: [ProcessDelta],
+        generation: UInt64,
+        state: PollState,
+        db: UsageDatabase,
+        appResolver: AppResolver,
+        monitor: NetworkMonitor?
+    ) {
+        guard generation == state.streamGeneration, state.shouldRun else { return }
 
-        deltaQueue.async { [weak self] in
-            let output = Self.runNettopSnapshot()
-            let now = Date()
-            let samples = NettopParser.parse(output)
-            let deltas = state.deltaTracker.ingest(samples)
+        let now = Date()
+        let elapsed: Double
+        if let prevDate = state.lastFrameDate {
+            elapsed = max(0.5, now.timeIntervalSince(prevDate))
+        } else {
+            elapsed = max(1.0, state.intervalSeconds)
+        }
+        state.lastFrameDate = now
 
-            let elapsed: Double
-            if let prevDate = state.lastSampleDate {
-                elapsed = max(0.2, now.timeIntervalSince(prevDate))
-            } else {
-                elapsed = fallbackInterval
-            }
-            let hadPrevious = state.lastSampleDate != nil
-            state.lastSampleDate = now
+        let ifaceSample = state.interfaceReader.sample(at: now)
+        let maxReasonableDelta = Int64(max(1.0, 1_250_000_000.0 * elapsed))
 
-            // Group deltas by canonical app record
-            var groupedDeltas: [String: (app: AppRecord, inBytes: Int64, outBytes: Int64)] = [:]
-            for delta in deltas {
-                let app = appResolver.resolve(pid: delta.pid, fallbackName: delta.processName)
-                if let existing = groupedDeltas[app.id] {
-                    groupedDeltas[app.id] = (
-                        existing.app,
-                        existing.inBytes + delta.deltaIn,
-                        existing.outBytes + delta.deltaOut
-                    )
-                } else {
-                    groupedDeltas[app.id] = (app, delta.deltaIn, delta.deltaOut)
-                }
+        var groupedDeltas: [String: (app: AppRecord, inBytes: Int64, outBytes: Int64)] = [:]
+        for delta in deltas {
+            let resolved = appResolver.resolveWithMetadata(pid: delta.pid, fallbackName: delta.processName)
+            if resolved.isVPNTunnel {
+                continue
             }
 
-            let batch = groupedDeltas.values.map { ($0.app, $0.inBytes, $0.outBytes) }
-            if !batch.isEmpty {
-                db.recordBatch(batch, at: now)
-            }
+            let dIn = (delta.deltaIn >= 0 && delta.deltaIn <= maxReasonableDelta) ? delta.deltaIn : 0
+            let dOut = (delta.deltaOut >= 0 && delta.deltaOut <= maxReasonableDelta) ? delta.deltaOut : 0
+            guard dIn > 0 || dOut > 0 else { continue }
 
-            var perAppSpeeds: [String: (inPerSec: Double, outPerSec: Double)] = [:]
-            var totalInSec: Double = 0
-            var totalOutSec: Double = 0
-
-            if hadPrevious {
-                for (appId, entry) in groupedDeltas {
-                    let inRate = Double(entry.inBytes) / elapsed
-                    let outRate = Double(entry.outBytes) / elapsed
-                    perAppSpeeds[appId] = (inRate, outRate)
-                    if includeSys || !entry.app.isSystem {
-                        totalInSec += inRate
-                        totalOutSec += outRate
-                    }
-                }
-            }
-
-            let startOfDay = Calendar.current.startOfDay(for: now)
-            let totals = db.fetchTotals(from: startOfDay, to: now, appId: nil, includeSystem: includeSys)
-            let summaries = db.fetchAppSummaries(from: startOfDay, to: now, includeSystem: includeSys)
-            let top5 = Array(summaries.prefix(5)).map { item -> AppUsageSummary in
-                let live = perAppSpeeds[item.app.id] ?? (0, 0)
-                return AppUsageSummary(
-                    app: item.app,
-                    bytesIn: item.bytesIn,
-                    bytesOut: item.bytesOut,
-                    liveInPerSec: live.inPerSec,
-                    liveOutPerSec: live.outPerSec
+            let app = resolved.record
+            if let existing = groupedDeltas[app.id] {
+                groupedDeltas[app.id] = (
+                    existing.app,
+                    existing.inBytes + dIn,
+                    existing.outBytes + dOut
                 )
+            } else {
+                groupedDeltas[app.id] = (app, dIn, dOut)
             }
+        }
 
-            Task { @MainActor [weak self] in
-                guard let self else { return }
-                self.isPolling = false
-                self.liveSpeedsByApp = perAppSpeeds
-                self.totalLiveInPerSec = totalInSec
-                self.totalLiveOutPerSec = totalOutSec
-                self.todayTotalIn = totals.bytesIn
-                self.todayTotalOut = totals.bytesOut
-                self.topLiveApps = top5
-                self.lastUpdated = now
+        let includeSys = state.includeSystem
+        let batch = groupedDeltas.values.map { ($0.app, $0.inBytes, $0.outBytes) }
+        let startOfDay = Calendar.current.startOfDay(for: now)
 
-                if hadPrevious {
-                    self.liveHistory.append(LiveSamplePoint(
-                        timestamp: now,
-                        bytesInPerSec: totalInSec,
-                        bytesOutPerSec: totalOutSec
-                    ))
-                    if self.liveHistory.count > 60 {
-                        self.liveHistory.removeFirst(self.liveHistory.count - 60)
-                    }
-                }
+        if !batch.isEmpty {
+            db.recordBatch(batch, at: now)
+            state.cachedTodayTotals = db.fetchTotals(from: startOfDay, to: now, appId: nil, includeSystem: includeSys)
+            state.cachedTopSummaries = db.fetchAppSummaries(from: startOfDay, to: now, includeSystem: includeSys)
+            state.hasLoadedTodayStats = true
+        } else if !state.hasLoadedTodayStats {
+            state.cachedTodayTotals = db.fetchTotals(from: startOfDay, to: now, appId: nil, includeSystem: includeSys)
+            state.cachedTopSummaries = db.fetchAppSummaries(from: startOfDay, to: now, includeSystem: includeSys)
+            state.hasLoadedTodayStats = true
+        }
+
+        var perAppSpeeds: [String: (inPerSec: Double, outPerSec: Double)] = [:]
+        var fallbackTotalInSec: Double = 0
+        var fallbackTotalOutSec: Double = 0
+
+        for (appId, entry) in groupedDeltas {
+            let inRate = Double(entry.inBytes) / elapsed
+            let outRate = Double(entry.outBytes) / elapsed
+            perAppSpeeds[appId] = (inRate, outRate)
+            if includeSys || !entry.app.isSystem {
+                fallbackTotalInSec += inRate
+                fallbackTotalOutSec += outRate
+            }
+        }
+
+        let totalInSec: Double
+        let totalOutSec: Double
+        if let ifaceSample {
+            totalInSec = ifaceSample.bytesInPerSec
+            totalOutSec = ifaceSample.bytesOutPerSec
+        } else {
+            totalInSec = fallbackTotalInSec
+            totalOutSec = fallbackTotalOutSec
+        }
+
+        let totals = state.cachedTodayTotals
+        let top5 = Array(state.cachedTopSummaries.prefix(5)).map { item -> AppUsageSummary in
+            let live = perAppSpeeds[item.app.id] ?? (0, 0)
+            return AppUsageSummary(
+                app: item.app,
+                bytesIn: item.bytesIn,
+                bytesOut: item.bytesOut,
+                liveInPerSec: live.inPerSec,
+                liveOutPerSec: live.outPerSec
+            )
+        }
+
+        Task { @MainActor [weak monitor] in
+            guard let monitor, !monitor.isPaused else { return }
+            monitor.liveSpeedsByApp = perAppSpeeds
+            monitor.totalLiveInPerSec = totalInSec
+            monitor.totalLiveOutPerSec = totalOutSec
+            monitor.todayTotalIn = totals.bytesIn
+            monitor.todayTotalOut = totals.bytesOut
+            monitor.topLiveApps = top5
+            monitor.lastUpdated = now
+
+            monitor.liveHistory.append(LiveSamplePoint(
+                timestamp: now,
+                bytesInPerSec: totalInSec,
+                bytesOutPerSec: totalOutSec
+            ))
+            if monitor.liveHistory.count > 60 {
+                monitor.liveHistory.removeFirst(monitor.liveHistory.count - 60)
             }
         }
     }
 
-    /// Executes `/usr/bin/nettop -P -L 1 -x -J bytes_in,bytes_out -t wifi -t wired` synchronously.
+    /// Executes `/usr/bin/nettop -P -L 1 -x -n -J bytes_in,bytes_out -t wifi -t wired` synchronously.
     public nonisolated static func runNettopSnapshot() -> String {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/nettop")
-        process.arguments = ["-P", "-L", "1", "-x", "-J", "bytes_in,bytes_out", "-t", "wifi", "-t", "wired"]
+        process.arguments = ["-P", "-L", "1", "-x", "-n", "-J", "bytes_in,bytes_out", "-t", "wifi", "-t", "wired"]
         process.standardInput = FileHandle.nullDevice
 
         let outPipe = Pipe()
-        let errPipe = Pipe()
         process.standardOutput = outPipe
-        process.standardError = errPipe
+        process.standardError = FileHandle.nullDevice
 
         do {
             try process.run()

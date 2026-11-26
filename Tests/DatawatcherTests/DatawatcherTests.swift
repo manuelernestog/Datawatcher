@@ -23,7 +23,7 @@ struct DatawatcherTests {
         #expect(samples[2] == RawProcessSample(processName: "com.apple.Safari", pid: 999, bytesIn: 1024, bytesOut: 2048))
     }
 
-    @Test("DeltaTracker establishes baseline on first ingest and handles counter resets")
+    @Test("DeltaTracker establishes baseline on first ingest and avoids spikes on drops or new PIDs")
     func deltaTrackerBaselineAndResets() {
         var tracker = DeltaTracker()
 
@@ -34,25 +34,149 @@ struct DatawatcherTests {
         #expect(tracker.ingest(baseline).isEmpty)
         #expect(tracker.hasBaseline)
 
+        // Slack's counter drops (simulating a closed socket) -> must emit 0, NOT 300.
+        // Chrome appears for the first time with accumulated bytes -> must establish baseline, NOT spike 1200.
         let second = [
             RawProcessSample(processName: "Safari", pid: 100, bytesIn: 8500, bytesOut: 1400),
             RawProcessSample(processName: "Slack", pid: 200, bytesIn: 300, bytesOut: 100),
             RawProcessSample(processName: "Chrome", pid: 300, bytesIn: 1200, bytesOut: 600)
         ]
         let deltas = tracker.ingest(second)
-        #expect(deltas.count == 3)
+        #expect(deltas.count == 1)
 
         let byPid = Dictionary(uniqueKeysWithValues: deltas.map { ($0.pid, $0) })
         #expect(byPid[100]?.deltaIn == 3500)
         #expect(byPid[100]?.deltaOut == 400)
-        #expect(byPid[200]?.deltaIn == 300)
-        #expect(byPid[200]?.deltaOut == 100)
-        #expect(byPid[300]?.deltaIn == 1200)
-        #expect(byPid[300]?.deltaOut == 600)
+        #expect(byPid[200] == nil)
+        #expect(byPid[300] == nil)
+
+        // Third tick: Slack recovers from new baseline 300->500, Chrome grows 1200->1800
+        let third = [
+            RawProcessSample(processName: "Safari", pid: 100, bytesIn: 8500, bytesOut: 1400),
+            RawProcessSample(processName: "Slack", pid: 200, bytesIn: 500, bytesOut: 250),
+            RawProcessSample(processName: "Chrome", pid: 300, bytesIn: 1800, bytesOut: 900)
+        ]
+        let deltas3 = tracker.ingest(third)
+        #expect(deltas3.count == 2)
+        let byPid3 = Dictionary(uniqueKeysWithValues: deltas3.map { ($0.pid, $0) })
+        #expect(byPid3[200]?.deltaIn == 200)
+        #expect(byPid3[200]?.deltaOut == 150)
+        #expect(byPid3[300]?.deltaIn == 600)
+        #expect(byPid3[300]?.deltaOut == 300)
 
         tracker.reset()
         #expect(!tracker.hasBaseline)
         #expect(tracker.ingest(second).isEmpty)
+    }
+
+    @Test("NettopParser clamps negative delta values to zero per column")
+    func nettopParserClampsNegativeDeltas() {
+        let lines = [
+            ",bytes_in,bytes_out,",
+            "Safari.101,-420,1500,",
+            "Slack.202,800,-120,",
+            "Idle.303,-10,-20,",
+            "Normal.404,250,350,"
+        ]
+
+        let deltas = NettopParser.parseDeltaFrame(lines)
+        #expect(deltas.count == 3)
+        let byPid = Dictionary(uniqueKeysWithValues: deltas.map { ($0.pid, $0) })
+        #expect(byPid[101]?.deltaIn == 0)
+        #expect(byPid[101]?.deltaOut == 1500)
+        #expect(byPid[202]?.deltaIn == 800)
+        #expect(byPid[202]?.deltaOut == 0)
+        #expect(byPid[303] == nil)
+        #expect(byPid[404]?.deltaIn == 250)
+        #expect(byPid[404]?.deltaOut == 350)
+    }
+
+    @Test("NettopStreamAssembler discards frame 1 baseline, handles split chunks, and avoids double-flushing")
+    func nettopStreamAssemblerDiscardsBaselineAndParsesDeltaFrames() {
+        var assembler = NettopStreamAssembler()
+
+        // Frame 1 (initial cumulative baseline) split across chunks -> must produce no delta frames
+        let chunk1 = ",bytes_in,bytes_out,\nSafari.100,9999999,8888888,\n"
+        #expect(assembler.append(chunk1).isEmpty)
+        #expect(assembler.flushCurrentFrame() == nil)
+
+        // Frame 2 arrives split mid-line
+        let chunk2a = ",bytes_in,bytes_out,\nSafari.100,1024,"
+        #expect(assembler.append(chunk2a).isEmpty)
+
+        let chunk2b = "512,\nChrome.200,0,0,\n"
+        #expect(assembler.append(chunk2b).isEmpty)
+
+        // Flush Frame 2 burst
+        let frame2 = assembler.flushCurrentFrame()
+        #expect(frame2?.count == 1)
+        #expect(frame2?.first == ProcessDelta(processName: "Safari", pid: 100, deltaIn: 1024, deltaOut: 512))
+
+        // Flushing again without new header must return nil (no double-emit)
+        #expect(assembler.flushCurrentFrame() == nil)
+
+        // Frame 3 (quiet frame with 0 activity) followed directly by Frame 4 header
+        let chunk3 = ",bytes_in,bytes_out,\nSafari.100,0,0,\n,bytes_in,bytes_out,\n"
+        let completed = assembler.append(chunk3)
+        #expect(completed.count == 1)
+        #expect(completed[0].isEmpty)
+
+        // Frame 4 flushed as quiet frame returns non-nil empty array
+        let frame4 = assembler.flushCurrentFrame()
+        #expect(frame4 != nil)
+        #expect(frame4?.isEmpty == true)
+    }
+
+    @Test("InterfaceBandwidthReader computes safe deltas and rejects resets or unphysical jumps")
+    func interfaceBandwidthDeltaSanity() {
+        #expect(InterfaceBandwidthReader.computeDelta(previous: 1000, current: 2500, maxDelta: 10_000) == 1500)
+        #expect(InterfaceBandwidthReader.computeDelta(previous: 5000, current: 1200, maxDelta: 10_000) == 0)
+        #expect(InterfaceBandwidthReader.computeDelta(previous: 1000, current: 50_000, maxDelta: 10_000) == 0)
+        #expect(InterfaceBandwidthReader.isVirtualInterface("utun5"))
+        #expect(InterfaceBandwidthReader.isVirtualInterface("awdl0"))
+        #expect(!InterfaceBandwidthReader.isVirtualInterface("en1"))
+    }
+
+    @Test("AppResolver detects VPN tunnel daemons and packet-tunnel appex bundles")
+    func appResolverDetectsVPNTunnelProcesses() throws {
+        let resolver = AppResolver()
+
+        #expect(resolver.isVPNTunnelExecutable(executablePath: "/usr/local/bin/openvpn", fallbackName: "openvpn"))
+        #expect(resolver.isVPNTunnelExecutable(executablePath: "/opt/homebrew/bin/wireguard-go", fallbackName: "wireguard-go"))
+        #expect(resolver.isVPNTunnelExecutable(executablePath: nil, fallbackName: "WireGuardNetwor"))
+        #expect(!resolver.isVPNTunnelExecutable(executablePath: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", fallbackName: "Google Chrome"))
+
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("datawatcher-appex-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let appexContents = tempRoot
+            .appendingPathComponent("MyVPN.app/Contents/PlugIns/CustomTunnel.appex/Contents", isDirectory: true)
+        try FileManager.default.createDirectory(at: appexContents.appendingPathComponent("MacOS"), withIntermediateDirectories: true)
+
+        let plist: [String: Any] = [
+            "CFBundleIdentifier": "com.example.vpn.tunnel",
+            "CFBundleName": "CustomTunnel",
+            "NSExtension": [
+                "NSExtensionPointIdentifier": "com.apple.networkextension.packet-tunnel"
+            ]
+        ]
+        let plistData = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        try plistData.write(to: appexContents.appendingPathComponent("Info.plist"))
+
+        let execPath = appexContents.appendingPathComponent("MacOS/CustomTunnel").path
+        #expect(resolver.isVPNTunnelExecutable(executablePath: execPath, fallbackName: "CustomTunnel"))
+    }
+
+    @Test("InterfaceBandwidthReader live smoke test returns zero-speed baseline on first sample")
+    func interfaceBandwidthReaderLiveSmokeTest() {
+        let reader = InterfaceBandwidthReader()
+        if let sample = reader.sample() {
+            #expect(!sample.interfaceName.isEmpty)
+            #expect(!InterfaceBandwidthReader.isVirtualInterface(sample.interfaceName))
+            #expect(sample.bytesInPerSec == 0)
+            #expect(sample.bytesOutPerSec == 0)
+        }
     }
 
     @Test("AppResolver extracts outermost .app bundle for helper executables")
