@@ -116,14 +116,25 @@ public enum L10nKey: CaseIterable, Sendable {
     case settingsSecondsSuffix
     case settingsShowSpeedMenuBar
     case settingsIncludeSystemDefault
+    case settingsLaunchAtLogin
     case settingsStorageSection
     case settingsDatabasePath
+    case settingsChangeLocation
+    case settingsResetLocation
+    case settingsChooseDatabaseFolderPrompt
+    case settingsChooseDatabaseFolderMessage
+    case settingsDatabaseExistsTitle
+    case settingsDatabaseExistsMessage
+    case settingsDatabaseUseExisting
+    case settingsDatabaseReplaceCurrent
     case settingsDatabaseSize
     case settingsExportData
     case settingsClearHistory
     case settingsClearConfirmTitle
     case settingsClearConfirmMessage
     case settingsClearConfirmAction
+    case settingsErrorTitle
+    case settingsOk
     case settingsCancel
     case settingsDone
     case exportPanelTitle
@@ -251,14 +262,25 @@ public final class LanguageManager: ObservableObject {
         case .settingsSecondsSuffix: return "sec"
         case .settingsShowSpeedMenuBar: return "Show live speed in menu bar"
         case .settingsIncludeSystemDefault: return "Show system processes by default"
+        case .settingsLaunchAtLogin: return "Open at login (in background)"
         case .settingsStorageSection: return "Local Storage"
         case .settingsDatabasePath: return "Database Location"
+        case .settingsChangeLocation: return "Change..."
+        case .settingsResetLocation: return "Reset to Default"
+        case .settingsChooseDatabaseFolderPrompt: return "Select Folder"
+        case .settingsChooseDatabaseFolderMessage: return "Choose a folder where Datawatcher will store its usage.sqlite database."
+        case .settingsDatabaseExistsTitle: return "Database Already Exists"
+        case .settingsDatabaseExistsMessage: return "The selected folder already contains a usage.sqlite file. Would you like to use the existing database or replace it with your current one?"
+        case .settingsDatabaseUseExisting: return "Use Existing"
+        case .settingsDatabaseReplaceCurrent: return "Replace with Current"
         case .settingsDatabaseSize: return "Database Size"
         case .settingsExportData: return "Export Usage History (CSV)"
         case .settingsClearHistory: return "Clear All History"
         case .settingsClearConfirmTitle: return "Clear all stored traffic history?"
         case .settingsClearConfirmMessage: return "This permanently deletes all local usage statistics from the SQLite database. This action cannot be undone."
         case .settingsClearConfirmAction: return "Delete History"
+        case .settingsErrorTitle: return "Action Failed"
+        case .settingsOk: return "OK"
         case .settingsCancel: return "Cancel"
         case .settingsDone: return "Done"
         case .exportPanelTitle: return "Export Network Usage History"
@@ -351,14 +373,25 @@ public final class LanguageManager: ObservableObject {
         case .settingsSecondsSuffix: return "seg"
         case .settingsShowSpeedMenuBar: return "Mostrar velocidad en la barra de menú"
         case .settingsIncludeSystemDefault: return "Mostrar procesos del sistema por defecto"
+        case .settingsLaunchAtLogin: return "Abrir al iniciar sesión (en segundo plano)"
         case .settingsStorageSection: return "Almacenamiento local"
         case .settingsDatabasePath: return "Ubicación de la base de datos"
+        case .settingsChangeLocation: return "Cambiar..."
+        case .settingsResetLocation: return "Restablecer"
+        case .settingsChooseDatabaseFolderPrompt: return "Seleccionar carpeta"
+        case .settingsChooseDatabaseFolderMessage: return "Elige una carpeta donde Datawatcher guardará la base de datos usage.sqlite."
+        case .settingsDatabaseExistsTitle: return "Ya existe una base de datos"
+        case .settingsDatabaseExistsMessage: return "La carpeta seleccionada ya contiene un archivo usage.sqlite. ¿Quieres usar la base de datos existente o reemplazarla con la actual?"
+        case .settingsDatabaseUseExisting: return "Usar la existente"
+        case .settingsDatabaseReplaceCurrent: return "Reemplazar con la actual"
         case .settingsDatabaseSize: return "Tamaño de la base de datos"
         case .settingsExportData: return "Exportar historial (CSV)"
         case .settingsClearHistory: return "Borrar todo el historial"
         case .settingsClearConfirmTitle: return "¿Borrar todo el historial de tráfico?"
         case .settingsClearConfirmMessage: return "Esto eliminará de forma permanente todas las estadísticas locales de la base de datos SQLite. Esta acción no se puede deshacer."
         case .settingsClearConfirmAction: return "Borrar historial"
+        case .settingsErrorTitle: return "No se pudo completar"
+        case .settingsOk: return "Aceptar"
         case .settingsCancel: return "Cancelar"
         case .settingsDone: return "Listo"
         case .exportPanelTitle: return "Exportar historial de consumo de red"

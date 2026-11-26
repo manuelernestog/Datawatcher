@@ -192,4 +192,88 @@ struct DatawatcherTests {
             #expect(!resolved.name.isEmpty)
         }
     }
+
+    @Test("UsageDatabase relocates, switches to existing, and overwrites safely")
+    func usageDatabaseRelocation() throws {
+        let tempRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("datawatcher-db-test-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempRoot) }
+
+        let dirA = tempRoot.appendingPathComponent("dirA", isDirectory: true)
+        let dirB = tempRoot.appendingPathComponent("dirB", isDirectory: true)
+        let dirC = tempRoot.appendingPathComponent("dirC", isDirectory: true)
+        let urlA = dirA.appendingPathComponent(UsageDatabase.databaseFilename)
+        let urlB = dirB.appendingPathComponent(UsageDatabase.databaseFilename)
+        let urlC = dirC.appendingPathComponent(UsageDatabase.databaseFilename)
+
+        let appA = AppRecord(id: "app.a", name: "App A", bundleId: "app.a", appPath: nil, isSystem: false)
+        let appC = AppRecord(id: "app.c", name: "App C", bundleId: "app.c", appPath: nil, isSystem: false)
+
+        let db = try UsageDatabase(path: urlA.path)
+        db.recordBatch([(appA, 1500, 300)])
+
+        // Move to empty destination urlB
+        try db.relocate(to: urlB, mode: .moveCurrent)
+        #expect(db.databaseURL?.standardizedFileURL == urlB.standardizedFileURL)
+        #expect(!FileManager.default.fileExists(atPath: urlA.path))
+        #expect(FileManager.default.fileExists(atPath: urlB.path))
+        #expect(db.fetchTotals(from: nil, to: nil, appId: nil, includeSystem: true).bytesIn == 1500)
+
+        // Prepare an existing database at urlC
+        do {
+            let existingDB = try UsageDatabase(path: urlC.path)
+            existingDB.recordBatch([(appC, 4200, 800)])
+        }
+
+        // moveCurrent should throw when destination already exists
+        var threwConflict = false
+        do {
+            try db.relocate(to: urlC, mode: .moveCurrent)
+        } catch UsageDatabase.DatabaseError.destinationAlreadyExists {
+            threwConflict = true
+        }
+        #expect(threwConflict)
+
+        // useExisting switches to urlC while preserving urlB
+        try db.relocate(to: urlC, mode: .useExisting)
+        #expect(db.databaseURL?.standardizedFileURL == urlC.standardizedFileURL)
+        #expect(FileManager.default.fileExists(atPath: urlB.path))
+        #expect(db.fetchTotals(from: nil, to: nil, appId: nil, includeSystem: true).bytesIn == 4200)
+
+        // Switch back to urlB and overwrite urlC with urlB's data
+        try db.relocate(to: urlB, mode: .useExisting)
+        try db.relocate(to: urlC, mode: .moveAndOverwrite)
+        #expect(db.databaseURL?.standardizedFileURL == urlC.standardizedFileURL)
+        #expect(!FileManager.default.fileExists(atPath: urlB.path))
+        #expect(db.fetchTotals(from: nil, to: nil, appId: nil, includeSystem: true).bytesIn == 1500)
+    }
+
+    @Test("LaunchAtLoginManager writes and removes LaunchAgent plist with background flag")
+    func launchAtLoginPlistManagement() throws {
+        let tempAgents = FileManager.default.temporaryDirectory
+            .appendingPathComponent("datawatcher-agents-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: tempAgents) }
+
+        #expect(!LaunchAtLoginManager.isEnabled(in: tempAgents))
+
+        try LaunchAtLoginManager.setEnabled(true, executablePath: "/Applications/Datawatcher.app/Contents/MacOS/Datawatcher", in: tempAgents)
+        #expect(LaunchAtLoginManager.isEnabled(in: tempAgents))
+
+        let plistData = try Data(contentsOf: LaunchAtLoginManager.plistURL(in: tempAgents))
+        let plist = try PropertyListSerialization.propertyList(from: plistData, format: nil) as? [String: Any]
+        #expect(plist?["Label"] as? String == LaunchAtLoginManager.agentLabel)
+        #expect(plist?["RunAtLoad"] as? Bool == true)
+        #expect(plist?["ProgramArguments"] as? [String] == [
+            "/Applications/Datawatcher.app/Contents/MacOS/Datawatcher",
+            LaunchAtLoginManager.backgroundArgument
+        ])
+
+        LaunchAtLoginManager.syncExecutablePathIfEnabled(executablePath: "/Users/test/Datawatcher.app/Contents/MacOS/Datawatcher", in: tempAgents)
+        let updatedData = try Data(contentsOf: LaunchAtLoginManager.plistURL(in: tempAgents))
+        let updatedPlist = try PropertyListSerialization.propertyList(from: updatedData, format: nil) as? [String: Any]
+        #expect((updatedPlist?["ProgramArguments"] as? [String])?.first == "/Users/test/Datawatcher.app/Contents/MacOS/Datawatcher")
+
+        try LaunchAtLoginManager.setEnabled(false, in: tempAgents)
+        #expect(!LaunchAtLoginManager.isEnabled(in: tempAgents))
+    }
 }

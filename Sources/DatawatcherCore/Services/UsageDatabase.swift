@@ -5,7 +5,23 @@ private let SQLITE_TRANSIENT = unsafeBitCast(-1, to: sqlite3_destructor_type.sel
 
 /// Thread-safe local SQLite storage for per-app hourly network usage history.
 public final class UsageDatabase: @unchecked Sendable {
-    public let databaseURL: URL?
+    public static let customDatabasePathKey = "datawatcher.databasePath"
+    public static let databaseFilename = "usage.sqlite"
+
+    private let urlLock = NSLock()
+    private var _databaseURL: URL?
+
+    public var databaseURL: URL? {
+        urlLock.lock()
+        defer { urlLock.unlock() }
+        return _databaseURL
+    }
+
+    private func setDatabaseURL(_ url: URL?) {
+        urlLock.lock()
+        _databaseURL = url
+        urlLock.unlock()
+    }
 
     private var db: OpaquePointer?
     private let queue = DispatchQueue(label: "com.datawatcher.sqlite", qos: .utility)
@@ -15,7 +31,32 @@ public final class UsageDatabase: @unchecked Sendable {
             ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Library/Application Support")
         let dir = appSupport.appendingPathComponent("Datawatcher", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("usage.sqlite")
+        return dir.appendingPathComponent(databaseFilename)
+    }
+
+    public static func configuredDatabaseURL(userDefaults: UserDefaults = .standard) -> URL {
+        if let saved = userDefaults.string(forKey: customDatabasePathKey),
+           !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return URL(fileURLWithPath: saved)
+        }
+        return defaultDatabaseURL()
+    }
+
+    public static func saveConfiguredDatabaseURL(_ url: URL?, userDefaults: UserDefaults = .standard) {
+        if let url,
+           url.standardizedFileURL.path != defaultDatabaseURL().standardizedFileURL.path {
+            userDefaults.set(url.standardizedFileURL.path, forKey: customDatabasePathKey)
+        } else {
+            userDefaults.removeObject(forKey: customDatabasePathKey)
+        }
+    }
+
+    public static func isUsingCustomLocation(userDefaults: UserDefaults = .standard) -> Bool {
+        guard let saved = userDefaults.string(forKey: customDatabasePathKey),
+              !saved.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return false
+        }
+        return URL(fileURLWithPath: saved).standardizedFileURL.path != defaultDatabaseURL().standardizedFileURL.path
     }
 
     public init(path: String? = nil) throws {
@@ -23,18 +64,26 @@ public final class UsageDatabase: @unchecked Sendable {
         if let path {
             resolvedPath = path
             if path == ":memory:" {
-                self.databaseURL = nil
+                self._databaseURL = nil
             } else {
                 let url = URL(fileURLWithPath: path)
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                self.databaseURL = url
+                self._databaseURL = url
             }
         } else {
             let url = Self.defaultDatabaseURL()
-            self.databaseURL = url
+            self._databaseURL = url
             resolvedPath = url.path
         }
 
+        self.db = try Self.openHandle(at: resolvedPath)
+
+        try queue.sync {
+            try self.configureAndMigrate()
+        }
+    }
+
+    private static func openHandle(at resolvedPath: String) throws -> OpaquePointer {
         var handle: OpaquePointer?
         if sqlite3_open_v2(
             resolvedPath,
@@ -46,11 +95,10 @@ public final class UsageDatabase: @unchecked Sendable {
             if let handle { sqlite3_close(handle) }
             throw DatabaseError.openFailed(message)
         }
-        self.db = handle
-
-        try queue.sync {
-            try self.configureAndMigrate()
+        guard let handle else {
+            throw DatabaseError.openFailed("SQLite returned a nil database handle")
         }
+        return handle
     }
 
     deinit {
@@ -59,14 +107,110 @@ public final class UsageDatabase: @unchecked Sendable {
         }
     }
 
+    public enum RelocationMode: Sendable {
+        case moveCurrent
+        case moveAndOverwrite
+        case useExisting
+    }
+
     public enum DatabaseError: Error, LocalizedError {
         case openFailed(String)
         case statementFailed(String)
+        case destinationAlreadyExists(String)
 
         public var errorDescription: String? {
             switch self {
             case .openFailed(let msg): return "SQLite open failed: \(msg)"
             case .statementFailed(let msg): return "SQLite statement failed: \(msg)"
+            case .destinationAlreadyExists(let path): return "A database already exists at \(path)"
+            }
+        }
+    }
+
+    /// Safely relocates or switches the active SQLite database file at runtime.
+    public func relocate(to destinationURL: URL, mode: RelocationMode) throws {
+        try queue.sync {
+            let fm = FileManager.default
+            let targetURL = destinationURL.standardizedFileURL
+            let currentURL = self.databaseURL?.standardizedFileURL
+
+            if currentURL == targetURL {
+                return
+            }
+
+            let targetDir = targetURL.deletingLastPathComponent()
+            try fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+
+            let destExists = fm.fileExists(atPath: targetURL.path)
+            if mode == .moveCurrent && destExists {
+                throw DatabaseError.destinationAlreadyExists(targetURL.path)
+            }
+
+            if let currentDB = self.db {
+                sqlite3_wal_checkpoint_v2(currentDB, nil, SQLITE_CHECKPOINT_TRUNCATE, nil, nil)
+                sqlite3_close(currentDB)
+                self.db = nil
+            }
+
+            let restoreOriginal: () -> Void = {
+                let originalPath = currentURL?.path ?? ":memory:"
+                if let handle = try? Self.openHandle(at: originalPath) {
+                    self.db = handle
+                    try? self.configureAndMigrate()
+                }
+            }
+
+            var tempURL: URL?
+            do {
+                switch mode {
+                case .useExisting:
+                    let newHandle = try Self.openHandle(at: targetURL.path)
+                    self.db = newHandle
+                    try self.configureAndMigrate()
+                    self.setDatabaseURL(targetURL)
+
+                case .moveCurrent, .moveAndOverwrite:
+                    if let currentURL, fm.fileExists(atPath: currentURL.path) {
+                        let stagedURL = targetDir.appendingPathComponent(".\(targetURL.lastPathComponent).tmp-\(UUID().uuidString)")
+                        tempURL = stagedURL
+                        try fm.copyItem(at: currentURL, to: stagedURL)
+
+                        try? fm.removeItem(atPath: targetURL.path + "-wal")
+                        try? fm.removeItem(atPath: targetURL.path + "-shm")
+
+                        if fm.fileExists(atPath: targetURL.path) {
+                            _ = try fm.replaceItemAt(targetURL, withItemAt: stagedURL)
+                        } else {
+                            try fm.moveItem(at: stagedURL, to: targetURL)
+                        }
+                        tempURL = nil
+                    } else if mode == .moveAndOverwrite && destExists {
+                        try fm.removeItem(at: targetURL)
+                        try? fm.removeItem(atPath: targetURL.path + "-wal")
+                        try? fm.removeItem(atPath: targetURL.path + "-shm")
+                    }
+
+                    let newHandle = try Self.openHandle(at: targetURL.path)
+                    self.db = newHandle
+                    try self.configureAndMigrate()
+                    self.setDatabaseURL(targetURL)
+
+                    if let currentURL {
+                        try? fm.removeItem(at: currentURL)
+                        try? fm.removeItem(atPath: currentURL.path + "-wal")
+                        try? fm.removeItem(atPath: currentURL.path + "-shm")
+                    }
+                }
+            } catch {
+                if let tempURL {
+                    try? fm.removeItem(at: tempURL)
+                }
+                if let partial = self.db {
+                    sqlite3_close(partial)
+                    self.db = nil
+                }
+                restoreOriginal()
+                throw error
             }
         }
     }

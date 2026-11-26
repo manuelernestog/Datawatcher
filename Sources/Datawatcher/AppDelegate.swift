@@ -1,4 +1,5 @@
 import AppKit
+import CoreServices
 import SwiftUI
 import Combine
 import DatawatcherCore
@@ -28,11 +29,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupMainMenu()
+        LaunchAtLoginManager.syncExecutablePathIfEnabled()
 
-        do {
-            let database = try UsageDatabase()
+        let configuredPath = UsageDatabase.configuredDatabaseURL().path
+        if let database = try? UsageDatabase(path: configuredPath) {
             self.monitor = NetworkMonitor(database: database)
-        } catch {
+        } else if let defaultDB = try? UsageDatabase() {
+            self.monitor = NetworkMonitor(database: defaultDB)
+        } else {
             // Fallback to in-memory database if disk location is unavailable
             let fallback = try! UsageDatabase(path: ":memory:")
             self.monitor = NetworkMonitor(database: fallback)
@@ -40,12 +44,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         self.viewModel = DashboardViewModel(monitor: monitor)
 
-        setupStatusItem()
-        setupMainWindow()
-        bindStatusItemUpdates()
+        let launchedInBackground = CommandLine.arguments.contains(LaunchAtLoginManager.backgroundArgument)
+            || wasLaunchedAsLoginItem()
 
+        setupStatusItem()
+        bindStatusItemUpdates()
         monitor.start()
-        showMainWindow()
+
+        if launchedInBackground {
+            NSApp.setActivationPolicy(.accessory)
+        } else {
+            setupMainWindow()
+            showMainWindow()
+        }
+    }
+
+    private func wasLaunchedAsLoginItem() -> Bool {
+        guard let event = NSAppleEventManager.shared().currentAppleEvent,
+              event.eventID == AEEventID(kAEOpenApplication),
+              let propData = event.paramDescriptor(forKeyword: AEKeyword(keyAEPropData)) else {
+            return false
+        }
+        return propData.enumCodeValue == DescType(keyAELaunchedAsLogInItem)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
