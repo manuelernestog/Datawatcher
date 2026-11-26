@@ -218,12 +218,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             .foregroundColor: NSColor.black
         ]
 
-        let arrowWidth: CGFloat = showIcon ? 0.0 : max(
-            ("↑" as NSString).size(withAttributes: attrs).width,
-            ("↓" as NSString).size(withAttributes: attrs).width
-        )
-        let arrowValueGap: CGFloat = showIcon ? 0.0 : 1.5
-
         let minValueWidth = ("999 KB/s" as NSString).size(withAttributes: attrs).width
         let upValueSize = (up as NSString).size(withAttributes: attrs)
         let downValueSize = (down as NSString).size(withAttributes: attrs)
@@ -232,8 +226,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let icon = showIcon ? statusIconImage : nil
         let iconSize = icon?.size ?? .zero
         let iconTextSpacing: CGFloat = iconSize.width > 0 ? 4.0 : 0.0
-        let arrowX = iconSize.width + iconTextSpacing
-        let valueRightX = arrowX + arrowWidth + arrowValueGap + valueColumnWidth
+        let textX = iconSize.width + iconTextSpacing
+        let valueRightX = textX + valueColumnWidth
         let totalWidth = ceil(valueRightX)
 
         let capHeight = stackedSpeedFont.capHeight
@@ -257,11 +251,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     operation: .sourceOver,
                     fraction: 1.0
                 )
-            }
-
-            if !showIcon {
-                ("↑" as NSString).draw(at: NSPoint(x: arrowX, y: topDrawY), withAttributes: attrs)
-                ("↓" as NSString).draw(at: NSPoint(x: arrowX, y: bottomDrawY), withAttributes: attrs)
             }
 
             (up as NSString).draw(at: NSPoint(x: valueRightX - upValueSize.width, y: topDrawY), withAttributes: attrs)
