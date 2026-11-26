@@ -1,6 +1,5 @@
 import SwiftUI
 import AppKit
-import UniformTypeIdentifiers
 import DatawatcherCore
 
 struct MainWindowView: View {
@@ -73,16 +72,6 @@ struct MainWindowView: View {
 
             Spacer()
 
-            // Language EN | ES toggle
-            Picker(l10n.text(.languageLabel), selection: $l10n.language) {
-                ForEach(AppLanguage.allCases) { lang in
-                    Text(lang.shortLabel).tag(lang)
-                }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 84)
-
             // Pause / Resume
             Button {
                 monitor.togglePause()
@@ -92,15 +81,6 @@ struct MainWindowView: View {
                     systemImage: monitor.isPaused ? "play.fill" : "pause.fill"
                 )
                 .font(.subheadline.weight(.medium))
-            }
-            .buttonStyle(.bordered)
-
-            // Export CSV
-            Button {
-                exportCSVWithPanel()
-            } label: {
-                Label(l10n.text(.exportCSV), systemImage: "square.and.arrow.up")
-                    .font(.subheadline.weight(.medium))
             }
             .buttonStyle(.bordered)
 
@@ -273,19 +253,6 @@ struct MainWindowView: View {
         case .year: return l10n.text(.presetYear)
         case .all: return l10n.text(.presetAll)
         case .custom: return l10n.text(.presetCustom)
-        }
-    }
-
-    private func exportCSVWithPanel() {
-        let panel = NSSavePanel()
-        panel.title = l10n.text(.exportPanelTitle)
-        panel.nameFieldStringValue = l10n.text(.exportDefaultFilename)
-        panel.allowedContentTypes = [.commaSeparatedText]
-        panel.canCreateDirectories = true
-
-        if panel.runModal() == .OK, let url = panel.url {
-            let csv = viewModel.generateCSVExport()
-            try? csv.write(to: url, atomically: true, encoding: .utf8)
         }
     }
 }

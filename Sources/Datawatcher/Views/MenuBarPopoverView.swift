@@ -32,15 +32,6 @@ struct MenuBarPopoverView: View {
                 .background((monitor.isPaused ? Color.orange : Color.green).opacity(0.14), in: Capsule())
 
                 Spacer()
-
-                Picker("", selection: $l10n.language) {
-                    ForEach(AppLanguage.allCases) { lang in
-                        Text(lang.shortLabel).tag(lang)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 74)
             }
 
             // Live Speed & Today Total

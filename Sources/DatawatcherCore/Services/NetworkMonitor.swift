@@ -10,6 +10,7 @@ public final class NetworkMonitor: ObservableObject {
 
     private static let pollIntervalKey = "datawatcher.pollInterval"
     private static let showSpeedMenuBarKey = "datawatcher.showSpeedInMenuBar"
+    private static let hideMenuBarIconKey = "datawatcher.hideMenuBarIcon"
     private static let includeSystemDefaultKey = "datawatcher.includeSystemByDefault"
 
     @Published public var isPaused: Bool = false {
@@ -42,6 +43,15 @@ public final class NetworkMonitor: ObservableObject {
     @Published public var showSpeedInMenuBar: Bool {
         didSet {
             UserDefaults.standard.set(showSpeedInMenuBar, forKey: Self.showSpeedMenuBarKey)
+            if !showSpeedInMenuBar && hideMenuBarIcon {
+                hideMenuBarIcon = false
+            }
+        }
+    }
+
+    @Published public var hideMenuBarIcon: Bool {
+        didSet {
+            UserDefaults.standard.set(hideMenuBarIcon, forKey: Self.hideMenuBarIconKey)
         }
     }
 
@@ -78,10 +88,18 @@ public final class NetworkMonitor: ObservableObject {
         let savedInterval = UserDefaults.standard.double(forKey: Self.pollIntervalKey)
         self.pollIntervalSeconds = savedInterval > 0 ? savedInterval : 2.0
 
+        let initialShowSpeed: Bool
         if UserDefaults.standard.object(forKey: Self.showSpeedMenuBarKey) != nil {
-            self.showSpeedInMenuBar = UserDefaults.standard.bool(forKey: Self.showSpeedMenuBarKey)
+            initialShowSpeed = UserDefaults.standard.bool(forKey: Self.showSpeedMenuBarKey)
         } else {
-            self.showSpeedInMenuBar = true
+            initialShowSpeed = true
+        }
+        self.showSpeedInMenuBar = initialShowSpeed
+
+        if UserDefaults.standard.object(forKey: Self.hideMenuBarIconKey) != nil {
+            self.hideMenuBarIcon = initialShowSpeed && UserDefaults.standard.bool(forKey: Self.hideMenuBarIconKey)
+        } else {
+            self.hideMenuBarIcon = false
         }
 
         if UserDefaults.standard.object(forKey: Self.includeSystemDefaultKey) != nil {

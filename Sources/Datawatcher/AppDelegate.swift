@@ -149,23 +149,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func bindStatusItemUpdates() {
-        Publishers.CombineLatest3(
+        Publishers.CombineLatest4(
             monitor.$totalLiveInPerSec,
             monitor.$totalLiveOutPerSec,
-            monitor.$showSpeedInMenuBar
+            monitor.$showSpeedInMenuBar,
+            monitor.$hideMenuBarIcon
         )
         .combineLatest(monitor.$isPaused)
         .receive(on: RunLoop.main)
         .sink { [weak self] tuple, isPaused in
-            let (inSpeed, outSpeed, showSpeed) = tuple
-            self?.updateStatusItemTitle(inSpeed: inSpeed, outSpeed: outSpeed, showSpeed: showSpeed, isPaused: isPaused)
+            let (inSpeed, outSpeed, showSpeed, hideIcon) = tuple
+            self?.updateStatusItemTitle(
+                inSpeed: inSpeed,
+                outSpeed: outSpeed,
+                showSpeed: showSpeed,
+                hideIcon: hideIcon,
+                isPaused: isPaused
+            )
         }
         .store(in: &cancellables)
     }
 
-    private func updateStatusItemTitle(inSpeed: Double, outSpeed: Double, showSpeed: Bool, isPaused: Bool) {
+    private func updateStatusItemTitle(
+        inSpeed: Double,
+        outSpeed: Double,
+        showSpeed: Bool,
+        hideIcon: Bool,
+        isPaused: Bool
+    ) {
         guard let button = statusItem?.button else { return }
+        let shouldShowIcon = !showSpeed || !hideIcon
         let renderKey: String
+
         if !showSpeed {
             renderKey = "icon-only"
             guard renderKey != lastStatusRenderKey else { return }
@@ -173,40 +188,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             button.imagePosition = .imageOnly
             button.title = ""
         } else if isPaused {
-            renderKey = "paused"
+            renderKey = shouldShowIcon ? "paused:icon" : "paused:text-only"
             guard renderKey != lastStatusRenderKey else { return }
-            button.image = statusIconImage
-            button.imagePosition = .imageLeading
-            button.title = " ❚❚"
+            if shouldShowIcon {
+                button.image = statusIconImage
+                button.imagePosition = .imageLeading
+                button.title = " ❚❚"
+            } else {
+                button.image = nil
+                button.imagePosition = .noImage
+                button.title = "❚❚"
+            }
         } else {
             let up = ByteFormatter.formatMenuBarSpeed(outSpeed)
             let down = ByteFormatter.formatMenuBarSpeed(inSpeed)
-            renderKey = "speed:\(up)|\(down)"
+            renderKey = "speed:\(shouldShowIcon ? "icon" : "no-icon"):\(up)|\(down)"
             guard renderKey != lastStatusRenderKey else { return }
-            button.image = makeStackedSpeedImage(up: up, down: down)
+            button.image = makeStackedSpeedImage(up: up, down: down, showIcon: shouldShowIcon)
             button.imagePosition = .imageOnly
             button.title = ""
         }
         lastStatusRenderKey = renderKey
     }
 
-    private func makeStackedSpeedImage(up: String, down: String) -> NSImage {
+    private func makeStackedSpeedImage(up: String, down: String, showIcon: Bool) -> NSImage {
         let barHeight: CGFloat = NSStatusBar.system.thickness > 0 ? NSStatusBar.system.thickness : 22.0
         let attrs: [NSAttributedString.Key: Any] = [
             .font: stackedSpeedFont,
             .foregroundColor: NSColor.black
         ]
 
+        let arrowWidth: CGFloat = showIcon ? 0.0 : max(
+            ("↑" as NSString).size(withAttributes: attrs).width,
+            ("↓" as NSString).size(withAttributes: attrs).width
+        )
+        let arrowValueGap: CGFloat = showIcon ? 0.0 : 1.5
+
         let minValueWidth = ("999 KB/s" as NSString).size(withAttributes: attrs).width
         let upValueSize = (up as NSString).size(withAttributes: attrs)
         let downValueSize = (down as NSString).size(withAttributes: attrs)
         let valueColumnWidth = ceil(max(minValueWidth, max(upValueSize.width, downValueSize.width)))
 
-        let icon = statusIconImage
+        let icon = showIcon ? statusIconImage : nil
         let iconSize = icon?.size ?? .zero
         let iconTextSpacing: CGFloat = iconSize.width > 0 ? 4.0 : 0.0
-        let textX = iconSize.width + iconTextSpacing
-        let valueRightX = textX + valueColumnWidth
+        let arrowX = iconSize.width + iconTextSpacing
+        let valueRightX = arrowX + arrowWidth + arrowValueGap + valueColumnWidth
         let totalWidth = ceil(valueRightX)
 
         let capHeight = stackedSpeedFont.capHeight
@@ -230,6 +257,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                     operation: .sourceOver,
                     fraction: 1.0
                 )
+            }
+
+            if !showIcon {
+                ("↑" as NSString).draw(at: NSPoint(x: arrowX, y: topDrawY), withAttributes: attrs)
+                ("↓" as NSString).draw(at: NSPoint(x: arrowX, y: bottomDrawY), withAttributes: attrs)
             }
 
             (up as NSString).draw(at: NSPoint(x: valueRightX - upValueSize.width, y: topDrawY), withAttributes: attrs)

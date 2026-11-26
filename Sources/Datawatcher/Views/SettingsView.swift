@@ -49,6 +49,8 @@ struct SettingsView: View {
                     }
 
                     Toggle(l10n.text(.settingsShowSpeedMenuBar), isOn: $monitor.showSpeedInMenuBar)
+                    Toggle(l10n.text(.settingsHideMenuBarIcon), isOn: $monitor.hideMenuBarIcon)
+                        .disabled(!monitor.showSpeedInMenuBar)
                     Toggle(l10n.text(.settingsIncludeSystemDefault), isOn: $monitor.includeSystemByDefault)
                     Toggle(
                         l10n.text(.settingsLaunchAtLogin),
@@ -120,7 +122,7 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
         }
-        .frame(width: 520, height: 480)
+        .frame(width: 520, height: 510)
         .onAppear {
             launchAtLogin = LaunchAtLoginManager.isEnabled()
             refreshStorageState()

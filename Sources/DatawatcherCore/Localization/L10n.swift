@@ -115,6 +115,7 @@ public enum L10nKey: CaseIterable, Sendable {
     case settingsPollInterval
     case settingsSecondsSuffix
     case settingsShowSpeedMenuBar
+    case settingsHideMenuBarIcon
     case settingsIncludeSystemDefault
     case settingsLaunchAtLogin
     case settingsStorageSection
@@ -261,6 +262,7 @@ public final class LanguageManager: ObservableObject {
         case .settingsPollInterval: return "Sampling Interval"
         case .settingsSecondsSuffix: return "sec"
         case .settingsShowSpeedMenuBar: return "Show live speed in menu bar"
+        case .settingsHideMenuBarIcon: return "Hide icon in menu bar"
         case .settingsIncludeSystemDefault: return "Show system processes by default"
         case .settingsLaunchAtLogin: return "Open at login (in background)"
         case .settingsStorageSection: return "Local Storage"
@@ -372,6 +374,7 @@ public final class LanguageManager: ObservableObject {
         case .settingsPollInterval: return "Intervalo de muestreo"
         case .settingsSecondsSuffix: return "seg"
         case .settingsShowSpeedMenuBar: return "Mostrar velocidad en la barra de menú"
+        case .settingsHideMenuBarIcon: return "Ocultar ícono en la barra de menú"
         case .settingsIncludeSystemDefault: return "Mostrar procesos del sistema por defecto"
         case .settingsLaunchAtLogin: return "Abrir al iniciar sesión (en segundo plano)"
         case .settingsStorageSection: return "Almacenamiento local"
