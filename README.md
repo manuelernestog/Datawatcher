@@ -13,6 +13,8 @@
 
 </div>
 
+<img src="screenshot.png" alt="Datawatcher App screenshot"  />
+
 ---
 
 ## ✨ Highlights / Características principales
