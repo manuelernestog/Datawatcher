@@ -144,6 +144,14 @@ public enum L10nKey: CaseIterable, Sendable {
     case settingsDone
     case exportPanelTitle
     case exportDefaultFilename
+
+    // About
+    case aboutTitle
+    case aboutSubtitle
+    case aboutVersionPrefix
+    case aboutDeveloperLabel
+    case aboutWebsiteLabel
+    case aboutRepositoryLabel
 }
 
 /// Manages the active language and persists selection in UserDefaults.
@@ -295,6 +303,13 @@ public final class LanguageManager: ObservableObject {
         case .settingsDone: return "Done"
         case .exportPanelTitle: return "Export Network Usage History"
         case .exportDefaultFilename: return "datawatcher-usage.csv"
+
+        case .aboutTitle: return "About Datawatcher"
+        case .aboutSubtitle: return "Native per-app network monitor for macOS"
+        case .aboutVersionPrefix: return "Version"
+        case .aboutDeveloperLabel: return "Developer"
+        case .aboutWebsiteLabel: return "Website"
+        case .aboutRepositoryLabel: return "GitHub"
         }
     }
 
@@ -411,6 +426,13 @@ public final class LanguageManager: ObservableObject {
         case .settingsDone: return "Listo"
         case .exportPanelTitle: return "Exportar historial de consumo de red"
         case .exportDefaultFilename: return "datawatcher-consumo.csv"
+
+        case .aboutTitle: return "Acerca de Datawatcher"
+        case .aboutSubtitle: return "Monitor nativo de consumo de red por app para macOS"
+        case .aboutVersionPrefix: return "Versión"
+        case .aboutDeveloperLabel: return "Desarrollador"
+        case .aboutWebsiteLabel: return "Sitio web"
+        case .aboutRepositoryLabel: return "GitHub"
         }
     }
 }

@@ -8,8 +8,10 @@ import DatawatcherCore
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private static let mainWindowFrameAutosaveName = NSWindow.FrameAutosaveName("DatawatcherMainWindowFrame")
     private static let mainWindowFullScreenKey = "datawatcher.mainWindowFullScreen"
+    private static let minMainWindowSize = NSSize(width: 1080, height: 690)
 
     private var mainWindow: NSWindow?
+    private var aboutWindow: NSWindow?
     private var statusItem: NSStatusItem?
     private var popover: NSPopover?
     private var cancellables = Set<AnyCancellable>()
@@ -92,7 +94,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let hostingController = NSHostingController(rootView: rootView)
         hostingController.sizingOptions = []
 
-        let minContentSize = NSSize(width: 1080, height: 690)
+        let minSize = Self.minMainWindowSize
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -102,9 +104,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.title = "Datawatcher"
         window.toolbarStyle = .unified
         window.titlebarSeparatorStyle = .automatic
-        window.minSize = minContentSize
-        window.contentMinSize = minContentSize
         window.contentViewController = hostingController
+        window.minSize = minSize
+        window.contentMinSize = minSize
         window.isReleasedWhenClosed = false
         window.delegate = self
 
@@ -113,18 +115,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             window.setContentSize(NSSize(width: 1180, height: 760))
             window.center()
         } else {
-            let contentSize = window.contentRect(forFrameRect: window.frame).size
-            if contentSize.width < minContentSize.width || contentSize.height < minContentSize.height {
-                window.setContentSize(NSSize(
-                    width: max(contentSize.width, minContentSize.width),
-                    height: max(contentSize.height, minContentSize.height)
-                ))
-            }
+            clampMainWindowToMinimumSize(window)
         }
+        window.minSize = minSize
+        window.contentMinSize = minSize
         window.setFrameAutosaveName(Self.mainWindowFrameAutosaveName)
 
         pendingRestoreFullScreen = UserDefaults.standard.bool(forKey: Self.mainWindowFullScreenKey)
         self.mainWindow = window
+    }
+
+    private func clampMainWindowToMinimumSize(_ window: NSWindow) {
+        let minSize = Self.minMainWindowSize
+        let frame = window.frame
+        if frame.width < minSize.width || frame.height < minSize.height {
+            window.setFrame(
+                NSRect(
+                    x: frame.origin.x,
+                    y: frame.origin.y,
+                    width: max(frame.width, minSize.width),
+                    height: max(frame.height, minSize.height)
+                ),
+                display: true
+            )
+        }
     }
 
     func showMainWindow() {
@@ -133,7 +147,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if mainWindow == nil {
             setupMainWindow()
         }
-        mainWindow?.makeKeyAndOrderFront(nil)
+        if let window = mainWindow {
+            window.minSize = Self.minMainWindowSize
+            window.contentMinSize = Self.minMainWindowSize
+            clampMainWindowToMinimumSize(window)
+            window.makeKeyAndOrderFront(nil)
+        }
         NSApp.activate(ignoringOtherApps: true)
         if pendingRestoreFullScreen {
             pendingRestoreFullScreen = false
@@ -142,6 +161,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         viewModel.reloadData()
+    }
+
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        guard sender === mainWindow else { return frameSize }
+        return NSSize(
+            width: max(frameSize.width, Self.minMainWindowSize.width),
+            height: max(frameSize.height, Self.minMainWindowSize.height)
+        )
     }
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
@@ -375,6 +402,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         pauseItem.target = self
         menu.addItem(pauseItem)
 
+        let aboutItem = NSMenuItem(
+            title: l10n.text(.aboutTitle),
+            action: #selector(menuOpenAbout),
+            keyEquivalent: ""
+        )
+        aboutItem.target = self
+        menu.addItem(aboutItem)
+
         menu.addItem(NSMenuItem.separator())
 
         let quitItem = NSMenuItem(
@@ -394,12 +429,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         showMainWindow()
     }
 
+    @objc func menuOpenAbout() {
+        showAboutWindow()
+    }
+
     @objc private func menuTogglePause() {
         monitor.togglePause()
     }
 
     @objc private func menuQuit() {
         NSApp.terminate(nil)
+    }
+
+    func showAboutWindow() {
+        popover?.performClose(nil)
+        NSApp.setActivationPolicy(.regular)
+
+        if let aboutWindow {
+            aboutWindow.title = l10n.text(.aboutTitle)
+            aboutWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let aboutView = AboutView()
+            .environmentObject(l10n)
+        let hostingController = NSHostingController(rootView: aboutView)
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 390, height: 390),
+            styleMask: [.titled, .closable],
+            backing: .buffered,
+            defer: false
+        )
+        window.title = l10n.text(.aboutTitle)
+        window.titlebarAppearsTransparent = true
+        window.isMovableByWindowBackground = true
+        window.contentViewController = hostingController
+        window.isReleasedWhenClosed = false
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        self.aboutWindow = window
     }
 
     // MARK: - Standard Application Menu
@@ -410,7 +481,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let appMenuItem = NSMenuItem()
         mainMenu.addItem(appMenuItem)
         let appMenu = NSMenu()
-        appMenu.addItem(withTitle: "Datawatcher", action: #selector(menuOpenDashboard), keyEquivalent: "")
+        let aboutItem = NSMenuItem(title: l10n.text(.aboutTitle), action: #selector(menuOpenAbout), keyEquivalent: "")
+        aboutItem.target = self
+        appMenu.addItem(aboutItem)
+        appMenu.addItem(NSMenuItem.separator())
+        let openItem = NSMenuItem(title: l10n.text(.menuBarOpenDashboard), action: #selector(menuOpenDashboard), keyEquivalent: "")
+        openItem.target = self
+        appMenu.addItem(openItem)
         appMenu.addItem(NSMenuItem.separator())
         appMenu.addItem(withTitle: "Close Window", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
         appMenu.addItem(withTitle: "Quit Datawatcher", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")

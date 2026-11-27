@@ -119,6 +119,23 @@ struct SettingsView: View {
                     }
                     .padding(.top, 4)
                 }
+
+                Section {
+                    Button {
+                        dismiss()
+                        NSApp.sendAction(#selector(AppDelegate.menuOpenAbout), to: nil, from: nil)
+                    } label: {
+                        HStack {
+                            Label(l10n.text(.aboutTitle), systemImage: "info.circle")
+                            Spacer()
+                            Text("1.0.0")
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                }
             }
             .formStyle(.grouped)
         }
