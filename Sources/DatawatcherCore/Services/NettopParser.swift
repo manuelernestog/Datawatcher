@@ -197,12 +197,18 @@ public struct NettopStreamAssembler: Sendable {
         partialLineBuffer.append(chunk)
         var emittedFrames: [[ProcessDelta]] = []
 
-        while let newlineIndex = partialLineBuffer.firstIndex(of: "\n") {
-            var line = String(partialLineBuffer[..<newlineIndex])
-            if line.hasSuffix("\r") {
-                line.removeLast()
+        let utf8 = partialLineBuffer.utf8
+        var searchStart = utf8.startIndex
+        while let newlineIndex = utf8[searchStart...].firstIndex(of: 0x0A) {
+            var lineEnd = newlineIndex
+            if lineEnd > searchStart {
+                let prev = utf8.index(before: lineEnd)
+                if utf8[prev] == 0x0D {
+                    lineEnd = prev
+                }
             }
-            partialLineBuffer.removeSubrange(...newlineIndex)
+            let line = String(decoding: utf8[searchStart..<lineEnd], as: UTF8.self)
+            searchStart = utf8.index(after: newlineIndex)
 
             if NettopParser.isHeaderLine(line) {
                 if frameIndex >= 2 && !hasFlushedCurrentFrame {
@@ -214,6 +220,10 @@ public struct NettopStreamAssembler: Sendable {
             } else if frameIndex >= 2 {
                 currentFrameLines.append(line)
             }
+        }
+
+        if searchStart > utf8.startIndex {
+            partialLineBuffer.removeSubrange(..<searchStart)
         }
 
         return emittedFrames

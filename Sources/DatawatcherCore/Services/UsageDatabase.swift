@@ -25,6 +25,14 @@ public final class UsageDatabase: @unchecked Sendable {
 
     private var db: OpaquePointer?
     private let queue = DispatchQueue(label: "com.datawatcher.sqlite", qos: .utility)
+    private var knownAppMetadata: [String: AppMetadataSnapshot] = [:]
+
+    private struct AppMetadataSnapshot: Equatable {
+        let name: String
+        let bundleId: String?
+        let appPath: String?
+        let isSystem: Bool
+    }
 
     public static func defaultDatabaseURL() -> URL {
         let appSupport = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
@@ -98,6 +106,7 @@ public final class UsageDatabase: @unchecked Sendable {
         guard let handle else {
             throw DatabaseError.openFailed("SQLite returned a nil database handle")
         }
+        sqlite3_busy_timeout(handle, 2000)
         return handle
     }
 
@@ -151,6 +160,7 @@ public final class UsageDatabase: @unchecked Sendable {
                 sqlite3_close(currentDB)
                 self.db = nil
             }
+            self.knownAppMetadata.removeAll()
 
             let restoreOriginal: () -> Void = {
                 let originalPath = currentURL?.path ?? ":memory:"
@@ -297,15 +307,24 @@ public final class UsageDatabase: @unchecked Sendable {
                 }
 
                 for item in nonZero {
-                    sqlite3_reset(appStmt)
-                    sqlite3_clear_bindings(appStmt)
-                    bindText(appStmt, index: 1, value: item.app.id)
-                    bindText(appStmt, index: 2, value: item.app.name)
-                    bindOptionalText(appStmt, index: 3, value: item.app.bundleId)
-                    bindOptionalText(appStmt, index: 4, value: item.app.appPath)
-                    sqlite3_bind_int(appStmt, 5, item.app.isSystem ? 1 : 0)
-                    sqlite3_bind_int64(appStmt, 6, nowTs)
-                    sqlite3_step(appStmt)
+                    let snapshot = AppMetadataSnapshot(
+                        name: item.app.name,
+                        bundleId: item.app.bundleId,
+                        appPath: item.app.appPath,
+                        isSystem: item.app.isSystem
+                    )
+                    if knownAppMetadata[item.app.id] != snapshot {
+                        sqlite3_reset(appStmt)
+                        sqlite3_clear_bindings(appStmt)
+                        bindText(appStmt, index: 1, value: item.app.id)
+                        bindText(appStmt, index: 2, value: item.app.name)
+                        bindOptionalText(appStmt, index: 3, value: item.app.bundleId)
+                        bindOptionalText(appStmt, index: 4, value: item.app.appPath)
+                        sqlite3_bind_int(appStmt, 5, item.app.isSystem ? 1 : 0)
+                        sqlite3_bind_int64(appStmt, 6, nowTs)
+                        sqlite3_step(appStmt)
+                        knownAppMetadata[item.app.id] = snapshot
+                    }
 
                     sqlite3_reset(usageStmt)
                     sqlite3_clear_bindings(usageStmt)
@@ -593,6 +612,7 @@ public final class UsageDatabase: @unchecked Sendable {
     /// Removes all stored traffic and app history.
     public func clearAllData() {
         queue.sync {
+            knownAppMetadata.removeAll()
             try? execute("DELETE FROM usage_hourly;")
             try? execute("DELETE FROM apps;")
             try? execute("VACUUM;")

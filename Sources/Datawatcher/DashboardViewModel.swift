@@ -25,20 +25,47 @@ final class DashboardViewModel: ObservableObject {
     @Published private(set) var timeSeries: [TimeBucketPoint] = []
     @Published private(set) var periodBytesIn: Int64 = 0
     @Published private(set) var periodBytesOut: Int64 = 0
+    @Published private(set) var liveSpeedsByApp: [String: (inPerSec: Double, outPerSec: Double)] = [:]
+    @Published private(set) var isMonitoringPaused: Bool = false
+
+    private(set) var isDashboardVisible: Bool = false
 
     private var cancellables = Set<AnyCancellable>()
     private var lastReloadDate: Date = .distantPast
+    private var lastReloadedRevision: UInt64 = .max
+    private var lastReloadedDayStart: Date = .distantPast
+    private var reloadGeneration: UInt64 = 0
 
     init(monitor: NetworkMonitor) {
         self.monitor = monitor
         self.includeSystem = monitor.includeSystemByDefault
+        self.isMonitoringPaused = monitor.isPaused
 
         monitor.$lastUpdated
             .sink { [weak self] now in
-                guard let self else { return }
+                guard let self, self.isDashboardVisible else { return }
+                let rev = self.monitor.databaseRevision
+                let dayStart = Calendar.current.startOfDay(for: now)
+                guard rev != self.lastReloadedRevision || dayStart != self.lastReloadedDayStart else {
+                    return
+                }
                 if now.timeIntervalSince(self.lastReloadDate) >= 2.0 {
                     self.reloadData()
                 }
+            }
+            .store(in: &cancellables)
+
+        monitor.$liveSpeedsByApp
+            .sink { [weak self] speeds in
+                guard let self, self.isDashboardVisible else { return }
+                self.liveSpeedsByApp = speeds
+            }
+            .store(in: &cancellables)
+
+        monitor.$isPaused
+            .sink { [weak self] paused in
+                guard let self else { return }
+                self.isMonitoringPaused = paused
             }
             .store(in: &cancellables)
 
@@ -49,8 +76,14 @@ final class DashboardViewModel: ObservableObject {
                 self.includeSystem = includeSys
             }
             .store(in: &cancellables)
+    }
 
-        reloadData()
+    func setDashboardVisible(_ visible: Bool) {
+        isDashboardVisible = visible
+        if visible {
+            liveSpeedsByApp = monitor.liveSpeedsByApp
+            reloadData()
+        }
     }
 
     var currentBounds: (from: Date?, to: Date?) {
@@ -92,7 +125,7 @@ final class DashboardViewModel: ObservableObject {
 
     /// App summaries merged with live speeds, filtered by search query, and sorted.
     var displayedApps: [AppUsageSummary] {
-        let speeds = monitor.liveSpeedsByApp
+        let speeds = liveSpeedsByApp
         let merged = rawSummaries.map { item -> AppUsageSummary in
             let live = speeds[item.app.id] ?? (0, 0)
             return AppUsageSummary(
@@ -132,20 +165,26 @@ final class DashboardViewModel: ObservableObject {
 
     var filteredLiveInPerSec: Double {
         if let selectedAppId {
-            return monitor.liveSpeedsByApp[selectedAppId]?.inPerSec ?? 0
+            return liveSpeedsByApp[selectedAppId]?.inPerSec ?? 0
         }
         return monitor.totalLiveInPerSec
     }
 
     var filteredLiveOutPerSec: Double {
         if let selectedAppId {
-            return monitor.liveSpeedsByApp[selectedAppId]?.outPerSec ?? 0
+            return liveSpeedsByApp[selectedAppId]?.outPerSec ?? 0
         }
         return monitor.totalLiveOutPerSec
     }
 
     func reloadData() {
-        lastReloadDate = Date()
+        let now = Date()
+        lastReloadDate = now
+        lastReloadedRevision = monitor.databaseRevision
+        lastReloadedDayStart = Calendar.current.startOfDay(for: now)
+        reloadGeneration &+= 1
+        let generation = reloadGeneration
+
         let bounds = currentBounds
         let granularity = currentGranularity
         let appId = selectedAppId
@@ -173,7 +212,7 @@ final class DashboardViewModel: ObservableObject {
             )
 
             Task { @MainActor [weak self] in
-                guard let self else { return }
+                guard let self, self.reloadGeneration == generation else { return }
                 self.rawSummaries = summaries
                 self.timeSeries = series
                 self.periodBytesIn = totals.bytesIn

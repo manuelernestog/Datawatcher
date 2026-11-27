@@ -4,7 +4,7 @@ import DatawatcherCore
 
 struct MainWindowView: View {
     @ObservedObject var viewModel: DashboardViewModel
-    @ObservedObject var monitor: NetworkMonitor
+    let monitor: NetworkMonitor
     @EnvironmentObject var l10n: LanguageManager
 
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
@@ -14,6 +14,12 @@ struct MainWindowView: View {
     @State private var showSettingsSheet = false
 
     private static let standardPresets: [DateRangePreset] = [.today, .week, .month, .year, .all]
+    private static let customRangeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        return formatter
+    }()
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -93,44 +99,9 @@ struct MainWindowView: View {
         }
         .listStyle(.sidebar)
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            sidebarStatusFooter
+            SidebarStatusFooterView(monitor: monitor)
         }
         .navigationSplitViewColumnWidth(min: 195, ideal: 220, max: 255)
-    }
-
-    private var sidebarStatusFooter: some View {
-        VStack(spacing: 0) {
-            Divider()
-                .opacity(0.5)
-
-            HStack(spacing: 9) {
-                Circle()
-                    .fill(monitor.isPaused ? Color.orange : Color.green)
-                    .frame(width: 8, height: 8)
-                    .shadow(color: (monitor.isPaused ? Color.orange : Color.green).opacity(0.45), radius: 3)
-
-                VStack(alignment: .leading, spacing: 1) {
-                    Text(monitor.isPaused ? l10n.text(.monitoringPaused) : l10n.text(.monitoringActive))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(monitor.isPaused ? .orange : .primary)
-
-                    if monitor.isPaused {
-                        Text(l10n.text(.appName))
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    } else {
-                        Text("↓ \(ByteFormatter.formatCompactSpeed(monitor.totalLiveInPerSec))/s  ↑ \(ByteFormatter.formatCompactSpeed(monitor.totalLiveOutPerSec))/s")
-                            .font(.caption2.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                    }
-                }
-
-                Spacer(minLength: 0)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-        }
     }
 
     private var customRangePopover: some View {
@@ -185,12 +156,12 @@ struct MainWindowView: View {
                 monitor.togglePause()
             } label: {
                 Label(
-                    monitor.isPaused ? l10n.text(.resume) : l10n.text(.pause),
-                    systemImage: monitor.isPaused ? "play.fill" : "pause.fill"
+                    viewModel.isMonitoringPaused ? l10n.text(.resume) : l10n.text(.pause),
+                    systemImage: viewModel.isMonitoringPaused ? "play.fill" : "pause.fill"
                 )
             }
-            .tint(monitor.isPaused ? .orange : nil)
-            .help(monitor.isPaused ? l10n.text(.resume) : l10n.text(.pause))
+            .tint(viewModel.isMonitoringPaused ? .orange : nil)
+            .help(viewModel.isMonitoringPaused ? l10n.text(.resume) : l10n.text(.pause))
         }
 
         if #available(macOS 26.0, *) {
@@ -258,13 +229,7 @@ struct MainWindowView: View {
                 icon: "arrow.up.arrow.down.circle.fill",
                 tint: .blue
             )
-            KpiCardView(
-                title: l10n.text(.kpiLiveSpeed),
-                value: "↓ \(ByteFormatter.formatSpeed(viewModel.filteredLiveInPerSec))",
-                subtitle: "↑ \(ByteFormatter.formatSpeed(viewModel.filteredLiveOutPerSec))",
-                icon: "bolt.horizontal.circle.fill",
-                tint: monitor.isPaused ? .orange : .green
-            )
+            LiveSpeedKpiCardView(viewModel: viewModel, monitor: monitor)
         }
     }
 
@@ -278,16 +243,13 @@ struct MainWindowView: View {
     }
 
     private var detailNavigationSubtitle: String {
-        let status = monitor.isPaused ? l10n.text(.monitoringPaused) : l10n.text(.monitoringActive)
+        let status = viewModel.isMonitoringPaused ? l10n.text(.monitoringPaused) : l10n.text(.monitoringActive)
         return "\(l10n.text(.appName)) • \(status)"
     }
 
     private var formattedCustomRange: String {
-        let formatter = DateFormatter()
-        formatter.dateStyle = .medium
-        formatter.timeStyle = .none
-        let start = formatter.string(from: min(viewModel.customStartDate, viewModel.customEndDate))
-        let end = formatter.string(from: max(viewModel.customStartDate, viewModel.customEndDate))
+        let start = Self.customRangeFormatter.string(from: min(viewModel.customStartDate, viewModel.customEndDate))
+        let end = Self.customRangeFormatter.string(from: max(viewModel.customStartDate, viewModel.customEndDate))
         return "\(start) – \(end)"
     }
 
@@ -374,6 +336,62 @@ private struct KpiCardView: View {
                     RoundedRectangle(cornerRadius: 12, style: .continuous)
                         .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
                 )
+        )
+    }
+}
+
+private struct SidebarStatusFooterView: View {
+    @ObservedObject var monitor: NetworkMonitor
+    @EnvironmentObject var l10n: LanguageManager
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .opacity(0.5)
+
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(monitor.isPaused ? Color.orange : Color.green)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: (monitor.isPaused ? Color.orange : Color.green).opacity(0.45), radius: 3)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(monitor.isPaused ? l10n.text(.monitoringPaused) : l10n.text(.monitoringActive))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(monitor.isPaused ? .orange : .primary)
+
+                    if monitor.isPaused {
+                        Text(l10n.text(.appName))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Text("↓ \(ByteFormatter.formatCompactSpeed(monitor.totalLiveInPerSec))/s  ↑ \(ByteFormatter.formatCompactSpeed(monitor.totalLiveOutPerSec))/s")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+        }
+    }
+}
+
+private struct LiveSpeedKpiCardView: View {
+    @ObservedObject var viewModel: DashboardViewModel
+    @ObservedObject var monitor: NetworkMonitor
+    @EnvironmentObject var l10n: LanguageManager
+
+    var body: some View {
+        KpiCardView(
+            title: l10n.text(.kpiLiveSpeed),
+            value: "↓ \(ByteFormatter.formatSpeed(viewModel.filteredLiveInPerSec))",
+            subtitle: "↑ \(ByteFormatter.formatSpeed(viewModel.filteredLiveOutPerSec))",
+            icon: "bolt.horizontal.circle.fill",
+            tint: monitor.isPaused ? .orange : .green
         )
     }
 }

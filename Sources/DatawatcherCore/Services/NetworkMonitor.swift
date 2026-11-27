@@ -90,18 +90,23 @@ public final class NetworkMonitor: ObservableObject {
     @Published public private(set) var todayTotalOut: Int64 = 0
     @Published public private(set) var topLiveApps: [AppUsageSummary] = []
     @Published public private(set) var lastUpdated: Date = Date()
+    @Published public private(set) var databaseRevision: UInt64 = 0
 
     private final class PollState: @unchecked Sendable {
         var streamProcess: Process?
+        var streamInPipe: Pipe?
         var streamOutHandle: FileHandle?
         var streamGeneration: UInt64 = 0
         var shouldRun: Bool = false
+        var isPopoverVisible: Bool = false
+        var databaseRevision: UInt64 = 0
         var assembler = NettopStreamAssembler()
         var interfaceReader = InterfaceBandwidthReader()
         var lastFrameDate: Date?
         var pendingFlushWorkItem: DispatchWorkItem?
         var restartWorkItem: DispatchWorkItem?
         var hasLoadedTodayStats: Bool = false
+        var lastStatsDayStart: Date?
         var cachedTopSummaries: [AppUsageSummary] = []
         var cachedTodayTotals: (bytesIn: Int64, bytesOut: Int64) = (0, 0)
         var includeSystem: Bool = true
@@ -153,6 +158,7 @@ public final class NetworkMonitor: ObservableObject {
         if let proc = pollState.streamProcess, proc.isRunning {
             proc.terminate()
         }
+        try? pollState.streamInPipe?.fileHandleForWriting.close()
     }
 
     public func start() {
@@ -205,6 +211,16 @@ public final class NetworkMonitor: ObservableObject {
         }
     }
 
+    public func setPopoverVisible(_ visible: Bool) {
+        let state = pollState
+        deltaQueue.async {
+            state.isPopoverVisible = visible
+        }
+        if visible {
+            refreshTodayStats()
+        }
+    }
+
     public func refreshTodayStats() {
         let now = Date()
         let startOfDay = Calendar.current.startOfDay(for: now)
@@ -218,6 +234,7 @@ public final class NetworkMonitor: ObservableObject {
             let summaries = db.fetchAppSummaries(from: startOfDay, to: now, includeSystem: includeSys)
             state.cachedTodayTotals = totals
             state.cachedTopSummaries = summaries
+            state.lastStatsDayStart = startOfDay
             state.hasLoadedTodayStats = true
 
             let top5 = Array(summaries.prefix(5)).map { item -> AppUsageSummary in
@@ -233,9 +250,15 @@ public final class NetworkMonitor: ObservableObject {
 
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.todayTotalIn = totals.bytesIn
-                self.todayTotalOut = totals.bytesOut
-                self.topLiveApps = top5
+                if self.todayTotalIn != totals.bytesIn {
+                    self.todayTotalIn = totals.bytesIn
+                }
+                if self.todayTotalOut != totals.bytesOut {
+                    self.todayTotalOut = totals.bytesOut
+                }
+                if self.topLiveApps != top5 {
+                    self.topLiveApps = top5
+                }
             }
         }
     }
@@ -244,27 +267,7 @@ public final class NetworkMonitor: ObservableObject {
 
     private nonisolated static func stopStreamLocked(state: PollState) {
         state.shouldRun = false
-        state.streamGeneration &+= 1
-        state.pendingFlushWorkItem?.cancel()
-        state.pendingFlushWorkItem = nil
-        state.restartWorkItem?.cancel()
-        state.restartWorkItem = nil
-
-        state.streamOutHandle?.readabilityHandler = nil
-        state.streamOutHandle = nil
-
-        if let proc = state.streamProcess {
-            proc.terminationHandler = nil
-            if proc.isRunning {
-                proc.terminate()
-                proc.waitUntilExit()
-            }
-            state.streamProcess = nil
-        }
-
-        state.assembler.reset()
-        state.interfaceReader.reset()
-        state.lastFrameDate = nil
+        terminateExistingProcessLocked(state: state)
     }
 
     private nonisolated static func terminateExistingProcessLocked(state: PollState) {
@@ -284,6 +287,11 @@ public final class NetworkMonitor: ObservableObject {
                 proc.waitUntilExit()
             }
             state.streamProcess = nil
+        }
+
+        if let inPipe = state.streamInPipe {
+            try? inPipe.fileHandleForWriting.close()
+            state.streamInPipe = nil
         }
 
         state.assembler.reset()
@@ -320,7 +328,10 @@ public final class NetworkMonitor: ObservableObject {
         env["LC_ALL"] = "en_US.UTF-8"
         process.environment = env
 
-        process.standardInput = FileHandle.nullDevice
+        // Keep stdin attached to an open Pipe rather than /dev/null; nettop's stdin
+        // event loop spins at ~135% CPU on immediate EOF from /dev/null.
+        let inPipe = Pipe()
+        process.standardInput = inPipe
         process.standardError = FileHandle.nullDevice
 
         let outPipe = Pipe()
@@ -328,6 +339,7 @@ public final class NetworkMonitor: ObservableObject {
         let outHandle = outPipe.fileHandleForReading
 
         state.streamProcess = process
+        state.streamInPipe = inPipe
         state.streamOutHandle = outHandle
 
         // Establish initial physical-interface baseline before the first delta frame arrives.
@@ -386,6 +398,10 @@ public final class NetworkMonitor: ObservableObject {
                 guard generation == state.streamGeneration, state.shouldRun else { return }
                 state.streamOutHandle?.readabilityHandler = nil
                 state.streamOutHandle = nil
+                if let inPipe = state.streamInPipe {
+                    try? inPipe.fileHandleForWriting.close()
+                    state.streamInPipe = nil
+                }
                 state.streamProcess = nil
 
                 state.restartWorkItem?.cancel()
@@ -402,7 +418,9 @@ public final class NetworkMonitor: ObservableObject {
             try process.run()
         } catch {
             outHandle.readabilityHandler = nil
+            try? inPipe.fileHandleForWriting.close()
             state.streamOutHandle = nil
+            state.streamInPipe = nil
             state.streamProcess = nil
         }
     }
@@ -454,17 +472,21 @@ public final class NetworkMonitor: ObservableObject {
 
         let includeSys = state.includeSystem
         let batch = groupedDeltas.values.map { ($0.app, $0.inBytes, $0.outBytes) }
-        let startOfDay = Calendar.current.startOfDay(for: now)
+        let shouldUpdatePopoverStats = state.isPopoverVisible
 
         if !batch.isEmpty {
             db.recordBatch(batch, at: now)
-            state.cachedTodayTotals = db.fetchTotals(from: startOfDay, to: now, appId: nil, includeSystem: includeSys)
-            state.cachedTopSummaries = db.fetchAppSummaries(from: startOfDay, to: now, includeSystem: includeSys)
-            state.hasLoadedTodayStats = true
-        } else if !state.hasLoadedTodayStats {
-            state.cachedTodayTotals = db.fetchTotals(from: startOfDay, to: now, appId: nil, includeSystem: includeSys)
-            state.cachedTopSummaries = db.fetchAppSummaries(from: startOfDay, to: now, includeSystem: includeSys)
-            state.hasLoadedTodayStats = true
+            state.databaseRevision &+= 1
+        }
+
+        if shouldUpdatePopoverStats {
+            let startOfDay = Calendar.current.startOfDay(for: now)
+            if !batch.isEmpty || !state.hasLoadedTodayStats || state.lastStatsDayStart != startOfDay {
+                state.cachedTodayTotals = db.fetchTotals(from: startOfDay, to: now, appId: nil, includeSystem: includeSys)
+                state.cachedTopSummaries = db.fetchAppSummaries(from: startOfDay, to: now, includeSystem: includeSys)
+                state.lastStatsDayStart = startOfDay
+                state.hasLoadedTodayStats = true
+            }
         }
 
         var perAppSpeeds: [String: (inPerSec: Double, outPerSec: Double)] = [:]
@@ -492,25 +514,49 @@ public final class NetworkMonitor: ObservableObject {
         }
 
         let totals = state.cachedTodayTotals
-        let top5 = Array(state.cachedTopSummaries.prefix(5)).map { item -> AppUsageSummary in
-            let live = perAppSpeeds[item.app.id] ?? (0, 0)
-            return AppUsageSummary(
-                app: item.app,
-                bytesIn: item.bytesIn,
-                bytesOut: item.bytesOut,
-                liveInPerSec: live.inPerSec,
-                liveOutPerSec: live.outPerSec
-            )
+        let top5: [AppUsageSummary]
+        if shouldUpdatePopoverStats {
+            top5 = Array(state.cachedTopSummaries.prefix(5)).map { item -> AppUsageSummary in
+                let live = perAppSpeeds[item.app.id] ?? (0, 0)
+                return AppUsageSummary(
+                    app: item.app,
+                    bytesIn: item.bytesIn,
+                    bytesOut: item.bytesOut,
+                    liveInPerSec: live.inPerSec,
+                    liveOutPerSec: live.outPerSec
+                )
+            }
+        } else {
+            top5 = []
         }
+
+        let dbRevision = state.databaseRevision
 
         Task { @MainActor [weak monitor] in
             guard let monitor, !monitor.isPaused else { return }
-            monitor.liveSpeedsByApp = perAppSpeeds
-            monitor.totalLiveInPerSec = totalInSec
-            monitor.totalLiveOutPerSec = totalOutSec
-            monitor.todayTotalIn = totals.bytesIn
-            monitor.todayTotalOut = totals.bytesOut
-            monitor.topLiveApps = top5
+            if !Self.speedsEqual(monitor.liveSpeedsByApp, perAppSpeeds) {
+                monitor.liveSpeedsByApp = perAppSpeeds
+            }
+            if monitor.totalLiveInPerSec != totalInSec {
+                monitor.totalLiveInPerSec = totalInSec
+            }
+            if monitor.totalLiveOutPerSec != totalOutSec {
+                monitor.totalLiveOutPerSec = totalOutSec
+            }
+            if shouldUpdatePopoverStats {
+                if monitor.todayTotalIn != totals.bytesIn {
+                    monitor.todayTotalIn = totals.bytesIn
+                }
+                if monitor.todayTotalOut != totals.bytesOut {
+                    monitor.todayTotalOut = totals.bytesOut
+                }
+                if monitor.topLiveApps != top5 {
+                    monitor.topLiveApps = top5
+                }
+            }
+            if monitor.databaseRevision != dbRevision {
+                monitor.databaseRevision = dbRevision
+            }
             monitor.lastUpdated = now
 
             monitor.liveHistory.append(LiveSamplePoint(
@@ -522,6 +568,21 @@ public final class NetworkMonitor: ObservableObject {
                 monitor.liveHistory.removeFirst(monitor.liveHistory.count - 60)
             }
         }
+    }
+
+    private nonisolated static func speedsEqual(
+        _ lhs: [String: (inPerSec: Double, outPerSec: Double)],
+        _ rhs: [String: (inPerSec: Double, outPerSec: Double)]
+    ) -> Bool {
+        guard lhs.count == rhs.count else { return false }
+        for (key, lVal) in lhs {
+            guard let rVal = rhs[key],
+                  lVal.inPerSec == rVal.inPerSec,
+                  lVal.outPerSec == rVal.outPerSec else {
+                return false
+            }
+        }
+        return true
     }
 
     /// Executes `/usr/bin/nettop -P -L 1 -x -n -J bytes_in,bytes_out -t wifi -t wired` synchronously.

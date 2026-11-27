@@ -400,4 +400,45 @@ struct DatawatcherTests {
         try LaunchAtLoginManager.setEnabled(false, in: tempAgents)
         #expect(!LaunchAtLoginManager.isEnabled(in: tempAgents))
     }
+
+    @Test("UsageDatabase skips redundant app metadata writes yet persists metadata changes")
+    func usageDatabaseAppMetadataCacheAndUpdates() throws {
+        let db = try UsageDatabase(path: ":memory:")
+        let initialApp = AppRecord(id: "com.example.app", name: "Old Name", bundleId: "com.example.app", appPath: "/Applications/Old.app", isSystem: false)
+        let renamedApp = AppRecord(id: "com.example.app", name: "New Name", bundleId: "com.example.app", appPath: "/Applications/New.app", isSystem: false)
+        let now = Date()
+
+        db.recordBatch([(initialApp, 100, 50)], at: now)
+        db.recordBatch([(initialApp, 200, 100)], at: now)
+        let firstSummary = db.fetchAppSummaries(from: nil, to: nil, includeSystem: true)
+        #expect(firstSummary.count == 1)
+        #expect(firstSummary[0].app.name == "Old Name")
+        #expect(firstSummary[0].bytesIn == 300)
+        #expect(firstSummary[0].bytesOut == 150)
+
+        db.recordBatch([(renamedApp, 400, 200)], at: now)
+        let updatedSummary = db.fetchAppSummaries(from: nil, to: nil, includeSystem: true)
+        #expect(updatedSummary.count == 1)
+        #expect(updatedSummary[0].app.name == "New Name")
+        #expect(updatedSummary[0].app.appPath == "/Applications/New.app")
+        #expect(updatedSummary[0].bytesIn == 700)
+        #expect(updatedSummary[0].bytesOut == 350)
+    }
+
+    @Test("NettopStreamAssembler parses multi-frame CRLF chunks with trailing partial line")
+    func nettopStreamAssemblerMultiFrameChunk() {
+        var assembler = NettopStreamAssembler()
+        let chunk = ",bytes_in,bytes_out,\r\nSafari.100,5000,5000,\r\n,bytes_in,bytes_out,\r\nSafari.100,120,30,\r\n,bytes_in,bytes_out,\r\nChrome.200,400,100,\r\nMail.300,50,"
+        let frames = assembler.append(chunk)
+        #expect(frames.count == 1)
+        #expect(frames[0] == [ProcessDelta(processName: "Safari", pid: 100, deltaIn: 120, deltaOut: 30)])
+
+        let rest = assembler.append("10,\r\n")
+        #expect(rest.isEmpty)
+        let flushed = assembler.flushCurrentFrame()
+        #expect(flushed == [
+            ProcessDelta(processName: "Chrome", pid: 200, deltaIn: 400, deltaOut: 100),
+            ProcessDelta(processName: "Mail", pid: 300, deltaIn: 50, deltaOut: 10)
+        ])
+    }
 }

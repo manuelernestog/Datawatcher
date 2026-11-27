@@ -4,7 +4,7 @@ import DatawatcherCore
 
 struct ChartsSectionView: View {
     @ObservedObject var viewModel: DashboardViewModel
-    @ObservedObject var monitor: NetworkMonitor
+    let monitor: NetworkMonitor
     @EnvironmentObject var l10n: LanguageManager
 
     enum RightChartMode: String, CaseIterable, Identifiable {
@@ -30,12 +30,42 @@ struct ChartsSectionView: View {
         let color: Color
     }
 
-    private struct LiveLineItem: Identifiable {
-        let id: String
-        let timestamp: Date
-        let series: String
-        let bytesPerSec: Double
-    }
+    private static let hourAxisFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm"
+        return f
+    }()
+
+    private static let dayAxisFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "d MMM"
+        return f
+    }()
+
+    private static let monthAxisFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM yy"
+        return f
+    }()
+
+    private static let hourBucketFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:00"
+        return f
+    }()
+
+    private static let dayBucketFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .none
+        return f
+    }()
+
+    private static let monthBucketFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMMM yyyy"
+        return f
+    }()
 
     private static let palette: [Color] = [
         Color(red: 0.14, green: 0.58, blue: 0.96),
@@ -194,7 +224,7 @@ struct ChartsSectionView: View {
             if rightMode == .topApps {
                 donutContent
             } else {
-                liveChartContent
+                LiveThroughputCardView(monitor: monitor)
             }
         }
         .padding(14)
@@ -256,87 +286,10 @@ struct ChartsSectionView: View {
         }
     }
 
-    private var liveChartContent: some View {
-        let downloadLabel = l10n.text(.chartDownloadLegend)
-        let uploadLabel = l10n.text(.chartUploadLegend)
-        let points = monitor.liveHistory
-
-        return Group {
-            if points.count >= 2 {
-                let lineItems: [LiveLineItem] = points.flatMap { p in
-                    [
-                        LiveLineItem(id: "\(p.id)-in", timestamp: p.timestamp, series: downloadLabel, bytesPerSec: p.bytesInPerSec),
-                        LiveLineItem(id: "\(p.id)-out", timestamp: p.timestamp, series: uploadLabel, bytesPerSec: p.bytesOutPerSec)
-                    ]
-                }
-
-                VStack(alignment: .leading, spacing: 6) {
-                    HStack(spacing: 12) {
-                        legendDot(color: .cyan, label: "\(downloadLabel): \(ByteFormatter.formatSpeed(monitor.totalLiveInPerSec))")
-                        legendDot(color: .purple, label: "\(uploadLabel): \(ByteFormatter.formatSpeed(monitor.totalLiveOutPerSec))")
-                    }
-                    .font(.caption2.monospacedDigit())
-
-                    Chart(lineItems) { item in
-                        AreaMark(
-                            x: .value("Time", item.timestamp),
-                            y: .value("Speed", item.bytesPerSec)
-                        )
-                        .foregroundStyle(by: .value("Direction", item.series))
-                        .interpolationMethod(.monotone)
-                        .opacity(0.22)
-
-                        LineMark(
-                            x: .value("Time", item.timestamp),
-                            y: .value("Speed", item.bytesPerSec)
-                        )
-                        .foregroundStyle(by: .value("Direction", item.series))
-                        .interpolationMethod(.monotone)
-                        .lineStyle(StrokeStyle(lineWidth: 2))
-                    }
-                    .chartForegroundStyleScale([
-                        downloadLabel: Color.cyan,
-                        uploadLabel: Color.purple
-                    ])
-                    .chartLegend(.hidden)
-                    .chartXAxis(.hidden)
-                    .chartYAxis {
-                        AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
-                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
-                                .foregroundStyle(.secondary.opacity(0.25))
-                            AxisValueLabel {
-                                if let speed = value.as(Double.self) {
-                                    Text(ByteFormatter.formatCompactSpeed(speed) + "/s")
-                                        .font(.caption2.monospacedDigit())
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-            } else {
-                emptyChartState
-            }
-        }
-    }
-
     // MARK: - Helpers
 
     private var emptyChartState: some View {
-        VStack(spacing: 6) {
-            Image(systemName: "chart.bar.xaxis")
-                .font(.title2)
-                .foregroundStyle(.secondary.opacity(0.7))
-            Text(l10n.text(.chartNoData))
-                .font(.subheadline.weight(.medium))
-                .foregroundStyle(.secondary)
-            Text(l10n.text(.chartNoDataSubtitle))
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 260)
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        ChartEmptyStateView()
     }
 
     private var cardBackground: some View {
@@ -381,32 +334,25 @@ struct ChartsSectionView: View {
     }
 
     private func formatAxisDate(_ date: Date) -> String {
-        let formatter = DateFormatter()
         switch viewModel.currentGranularity {
         case .hour:
-            formatter.dateFormat = "HH:mm"
-        case .day:
-            formatter.dateFormat = "d MMM"
-        case .week:
-            formatter.dateFormat = "d MMM"
+            return Self.hourAxisFormatter.string(from: date)
+        case .day, .week:
+            return Self.dayAxisFormatter.string(from: date)
         case .month:
-            formatter.dateFormat = "MMM yy"
+            return Self.monthAxisFormatter.string(from: date)
         }
-        return formatter.string(from: date)
     }
 
     private func formatBucketLabel(_ date: Date) -> String {
-        let formatter = DateFormatter()
         switch viewModel.currentGranularity {
         case .hour:
-            formatter.dateFormat = "HH:00"
+            return Self.hourBucketFormatter.string(from: date)
         case .day, .week:
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .none
+            return Self.dayBucketFormatter.string(from: date)
         case .month:
-            formatter.dateFormat = "MMMM yyyy"
+            return Self.monthBucketFormatter.string(from: date)
         }
-        return formatter.string(from: date)
     }
 
     private func nearestBucket(to target: Date) -> TimeBucketPoint? {
@@ -438,6 +384,113 @@ struct ChartsSectionView: View {
             }
         }
         return slices
+    }
+}
+
+private struct ChartEmptyStateView: View {
+    @EnvironmentObject var l10n: LanguageManager
+
+    var body: some View {
+        VStack(spacing: 6) {
+            Image(systemName: "chart.bar.xaxis")
+                .font(.title2)
+                .foregroundStyle(.secondary.opacity(0.7))
+            Text(l10n.text(.chartNoData))
+                .font(.subheadline.weight(.medium))
+                .foregroundStyle(.secondary)
+            Text(l10n.text(.chartNoDataSubtitle))
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 260)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+private struct LiveThroughputCardView: View {
+    @ObservedObject var monitor: NetworkMonitor
+    @EnvironmentObject var l10n: LanguageManager
+
+    private struct LiveLineItem: Identifiable {
+        let id: String
+        let timestamp: Date
+        let series: String
+        let bytesPerSec: Double
+    }
+
+    var body: some View {
+        let downloadLabel = l10n.text(.chartDownloadLegend)
+        let uploadLabel = l10n.text(.chartUploadLegend)
+        let points = monitor.liveHistory
+
+        Group {
+            if points.count >= 2 {
+                let lineItems: [LiveLineItem] = points.flatMap { p in
+                    [
+                        LiveLineItem(id: "\(p.id)-in", timestamp: p.timestamp, series: downloadLabel, bytesPerSec: p.bytesInPerSec),
+                        LiveLineItem(id: "\(p.id)-out", timestamp: p.timestamp, series: uploadLabel, bytesPerSec: p.bytesOutPerSec)
+                    ]
+                }
+
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 12) {
+                        HStack(spacing: 5) {
+                            Circle().fill(.cyan).frame(width: 8, height: 8)
+                            Text("\(downloadLabel): \(ByteFormatter.formatSpeed(monitor.totalLiveInPerSec))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        HStack(spacing: 5) {
+                            Circle().fill(.purple).frame(width: 8, height: 8)
+                            Text("\(uploadLabel): \(ByteFormatter.formatSpeed(monitor.totalLiveOutPerSec))")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .font(.caption2.monospacedDigit())
+
+                    Chart(lineItems) { item in
+                        AreaMark(
+                            x: .value("Time", item.timestamp),
+                            y: .value("Speed", item.bytesPerSec)
+                        )
+                        .foregroundStyle(by: .value("Direction", item.series))
+                        .interpolationMethod(.monotone)
+                        .opacity(0.22)
+
+                        LineMark(
+                            x: .value("Time", item.timestamp),
+                            y: .value("Speed", item.bytesPerSec)
+                        )
+                        .foregroundStyle(by: .value("Direction", item.series))
+                        .interpolationMethod(.monotone)
+                        .lineStyle(StrokeStyle(lineWidth: 2))
+                    }
+                    .chartForegroundStyleScale([
+                        downloadLabel: Color.cyan,
+                        uploadLabel: Color.purple
+                    ])
+                    .chartLegend(.hidden)
+                    .chartXAxis(.hidden)
+                    .chartYAxis {
+                        AxisMarks(position: .leading, values: .automatic(desiredCount: 4)) { value in
+                            AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5, dash: [3, 3]))
+                                .foregroundStyle(.secondary.opacity(0.25))
+                            AxisValueLabel {
+                                if let speed = value.as(Double.self) {
+                                    Text(ByteFormatter.formatCompactSpeed(speed) + "/s")
+                                        .font(.caption2.monospacedDigit())
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            } else {
+                ChartEmptyStateView()
+            }
+        }
     }
 }
 

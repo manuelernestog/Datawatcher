@@ -5,7 +5,7 @@ import Combine
 import DatawatcherCore
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPopoverDelegate {
     private static let mainWindowFrameAutosaveName = NSWindow.FrameAutosaveName("DatawatcherMainWindowFrame")
     private static let mainWindowFullScreenKey = "datawatcher.mainWindowFullScreen"
     private static let minMainWindowSize = NSSize(width: 1080, height: 690)
@@ -29,6 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }()
 
     private let stackedSpeedFont = NSFont.monospacedDigitSystemFont(ofSize: 9.0, weight: .medium)
+    private lazy var stackedSpeedTextAttributes: [NSAttributedString.Key: Any] = [
+        .font: stackedSpeedFont,
+        .foregroundColor: NSColor.black
+    ]
+    private lazy var minStackedSpeedWidth: CGFloat = {
+        ("999 KB/s" as NSString).size(withAttributes: stackedSpeedTextAttributes).width
+    }()
 
     private var monitor: NetworkMonitor!
     private var viewModel: DashboardViewModel!
@@ -160,7 +167,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
                 window.toggleFullScreen(nil)
             }
         }
-        viewModel.reloadData()
+        viewModel.setDashboardVisible(true)
     }
 
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
@@ -173,6 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func windowShouldClose(_ sender: NSWindow) -> Bool {
         persistMainWindowFrame(sender)
+        viewModel.setDashboardVisible(false)
         if sender.styleMask.contains(.fullScreen) {
             hideAfterExitingFullScreen = true
             sender.toggleFullScreen(nil)
@@ -181,6 +189,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         sender.orderOut(nil)
         NSApp.setActivationPolicy(.accessory)
         return false
+    }
+
+    func windowDidMiniaturize(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === mainWindow else { return }
+        viewModel.setDashboardVisible(false)
+    }
+
+    func windowDidDeminiaturize(_ notification: Notification) {
+        guard (notification.object as? NSWindow) === mainWindow else { return }
+        viewModel.setDashboardVisible(true)
     }
 
     func windowDidEndLiveResize(_ notification: Notification) {
@@ -199,6 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let window = notification.object as? NSWindow
         if hideAfterExitingFullScreen {
             hideAfterExitingFullScreen = false
+            viewModel.setDashboardVisible(false)
             window?.orderOut(nil)
             NSApp.setActivationPolicy(.accessory)
         } else {
@@ -228,6 +247,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
+        popover.delegate = self
         popover.contentSize = NSSize(width: 340, height: 420)
         let popoverView = MenuBarPopoverView(
             monitor: monitor,
@@ -308,15 +328,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func makeStackedSpeedImage(up: String, down: String, showIcon: Bool) -> NSImage {
         let barHeight: CGFloat = NSStatusBar.system.thickness > 0 ? NSStatusBar.system.thickness : 22.0
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: stackedSpeedFont,
-            .foregroundColor: NSColor.black
-        ]
+        let attrs = stackedSpeedTextAttributes
 
-        let minValueWidth = ("999 KB/s" as NSString).size(withAttributes: attrs).width
         let upValueSize = (up as NSString).size(withAttributes: attrs)
         let downValueSize = (down as NSString).size(withAttributes: attrs)
-        let valueColumnWidth = ceil(max(minValueWidth, max(upValueSize.width, downValueSize.width)))
+        let valueColumnWidth = ceil(max(minStackedSpeedWidth, max(upValueSize.width, downValueSize.width)))
 
         let icon = showIcon ? statusIconImage : nil
         let iconSize = icon?.size ?? .zero
@@ -375,11 +391,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         guard let popover else { return }
         if popover.isShown {
             popover.performClose(sender)
+            monitor.setPopoverVisible(false)
         } else {
-            monitor.refreshTodayStats()
+            monitor.setPopoverVisible(true)
             popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
             popover.contentViewController?.view.window?.makeKey()
         }
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        monitor.setPopoverVisible(false)
     }
 
     private func showContextMenu(from sender: NSStatusBarButton) {

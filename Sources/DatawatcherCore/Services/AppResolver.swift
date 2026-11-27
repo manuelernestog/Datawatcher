@@ -26,8 +26,15 @@ public final class AppResolver: @unchecked Sendable {
         "mihomo"
     ]
 
+    private struct CachedBundleInfo {
+        let name: String
+        let bundleId: String?
+        let isSystem: Bool
+    }
+
     private let lock = NSLock()
     private var pidCache: [Int32: (record: AppRecord, isVPNTunnel: Bool, resolvedAt: Date)] = [:]
+    private var bundleInfoCache: [String: CachedBundleInfo] = [:]
     private var extensionVPNCheckCache: [String: Bool] = [:]
     private let cacheTTL: TimeInterval = 60.0
 
@@ -141,23 +148,16 @@ public final class AppResolver: @unchecked Sendable {
         let isVPNTunnel = isVPNTunnelExecutable(executablePath: execPath, fallbackName: fallbackName)
 
         if let execPath, let outerAppURL = outermostAppBundleURL(fromExecutablePath: execPath) {
-            let bundle = Bundle(url: outerAppURL)
-            let bundleId = bundle?.bundleIdentifier
-            let displayName = (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
-                ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
-                ?? outerAppURL.deletingPathExtension().lastPathComponent
-            let cleanName = displayName.trimmingCharacters(in: .whitespacesAndNewlines)
-            let finalName = cleanName.isEmpty ? outerAppURL.deletingPathExtension().lastPathComponent : cleanName
             let appPath = outerAppURL.path
-            let isSys = isSystemPath(appPath, hasAppBundle: true)
-            let id = bundleId ?? appPath
+            let info = cachedBundleInfo(for: outerAppURL, path: appPath)
+            let id = info.bundleId ?? appPath
 
             let record = AppRecord(
                 id: id,
-                name: finalName,
-                bundleId: bundleId,
+                name: info.name,
+                bundleId: info.bundleId,
                 appPath: appPath,
-                isSystem: isSys
+                isSystem: info.isSystem
             )
             return (record, isVPNTunnel)
         }
@@ -165,20 +165,19 @@ public final class AppResolver: @unchecked Sendable {
         if let runningApp = NSRunningApplication(processIdentifier: pid),
            let bundleURL = runningApp.bundleURL {
             let outerURL = outermostAppBundleURL(fromExecutablePath: bundleURL.path) ?? bundleURL
-            let bundle = Bundle(url: outerURL)
-            let bundleId = runningApp.bundleIdentifier ?? bundle?.bundleIdentifier
-            let name = runningApp.localizedName
-                ?? (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
-                ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
-                ?? outerURL.deletingPathExtension().lastPathComponent
             let appPath = outerURL.path
-            let isSys = isSystemPath(appPath, hasAppBundle: true)
+            let info = cachedBundleInfo(
+                for: outerURL,
+                path: appPath,
+                fallbackName: runningApp.localizedName,
+                fallbackBundleId: runningApp.bundleIdentifier
+            )
             let record = AppRecord(
-                id: bundleId ?? appPath,
-                name: name,
-                bundleId: bundleId,
+                id: info.bundleId ?? appPath,
+                name: info.name,
+                bundleId: info.bundleId,
                 appPath: appPath,
-                isSystem: isSys
+                isSystem: info.isSystem
             )
             return (record, isVPNTunnel)
         }
@@ -195,6 +194,42 @@ public final class AppResolver: @unchecked Sendable {
             isSystem: isSys
         )
         return (record, isVPNTunnel)
+    }
+
+    private func cachedBundleInfo(
+        for appURL: URL,
+        path: String,
+        fallbackName: String? = nil,
+        fallbackBundleId: String? = nil
+    ) -> CachedBundleInfo {
+        lock.lock()
+        if let cached = bundleInfoCache[path] {
+            lock.unlock()
+            return cached
+        }
+        lock.unlock()
+
+        let bundle = Bundle(url: appURL)
+        let bundleId = fallbackBundleId ?? bundle?.bundleIdentifier
+        let rawName = fallbackName
+            ?? (bundle?.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (bundle?.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? appURL.deletingPathExtension().lastPathComponent
+        let cleanName = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalName = cleanName.isEmpty ? appURL.deletingPathExtension().lastPathComponent : cleanName
+        let info = CachedBundleInfo(
+            name: finalName,
+            bundleId: bundleId,
+            isSystem: isSystemPath(path, hasAppBundle: true)
+        )
+
+        lock.lock()
+        bundleInfoCache[path] = info
+        if bundleInfoCache.count > 512 {
+            bundleInfoCache.removeAll(keepingCapacity: true)
+        }
+        lock.unlock()
+        return info
     }
 
     private func executablePath(for pid: Int32) -> String? {
