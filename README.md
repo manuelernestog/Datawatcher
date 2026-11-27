@@ -8,11 +8,8 @@
 
 *Monitor de consumo de red por aplicación para macOS — 100% local, sin nube y con telemetría en tiempo real en la barra de menú.*
 
-![macOS](https://img.shields.io/badge/macOS-14.0%2B-000000?style=for-the-badge&logo=apple&logoColor=white)
 ![Swift](https://img.shields.io/badge/Swift-6.0-F05138?style=for-the-badge&logo=swift&logoColor=white)
 ![SwiftUI](https://img.shields.io/badge/UI-SwiftUI%20%2B%20Swift%20Charts-007AFF?style=for-the-badge)
-![Storage](https://img.shields.io/badge/Storage-SQLite%20WAL-003B57?style=for-the-badge&logo=sqlite&logoColor=white)
-![Languages](https://img.shields.io/badge/Languages-EN%20%7C%20ES-2EA44F?style=for-the-badge)
 
 </div>
 
