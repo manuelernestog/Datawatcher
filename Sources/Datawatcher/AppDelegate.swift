@@ -92,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let hostingController = NSHostingController(rootView: rootView)
         hostingController.sizingOptions = []
 
+        let minContentSize = NSSize(width: 1080, height: 690)
         let window = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 1180, height: 760),
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -101,7 +102,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.title = "Datawatcher"
         window.toolbarStyle = .unified
         window.titlebarSeparatorStyle = .automatic
-        window.minSize = NSSize(width: 960, height: 640)
+        window.minSize = minContentSize
+        window.contentMinSize = minContentSize
         window.contentViewController = hostingController
         window.isReleasedWhenClosed = false
         window.delegate = self
@@ -110,6 +112,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         if !restored {
             window.setContentSize(NSSize(width: 1180, height: 760))
             window.center()
+        } else {
+            let contentSize = window.contentRect(forFrameRect: window.frame).size
+            if contentSize.width < minContentSize.width || contentSize.height < minContentSize.height {
+                window.setContentSize(NSSize(
+                    width: max(contentSize.width, minContentSize.width),
+                    height: max(contentSize.height, minContentSize.height)
+                ))
+            }
         }
         window.setFrameAutosaveName(Self.mainWindowFrameAutosaveName)
 

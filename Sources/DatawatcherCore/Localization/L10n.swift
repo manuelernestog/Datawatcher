@@ -51,8 +51,6 @@ public enum L10nKey: CaseIterable, Sendable {
 
     // Filters & Controls
     case includeSystem
-    case showSystemProcesses
-    case hideSystemProcesses
     case allAppsFilter
     case clearFilter
     case filteredByApp
@@ -209,8 +207,6 @@ public final class LanguageManager: ObservableObject {
         case .sidebarEditRange: return "Edit Dates"
 
         case .includeSystem: return "System Processes"
-        case .showSystemProcesses: return "Show System Processes"
-        case .hideSystemProcesses: return "Hide System Processes"
         case .allAppsFilter: return "All Apps"
         case .clearFilter: return "Clear"
         case .filteredByApp: return "Filtered:"
@@ -275,7 +271,7 @@ public final class LanguageManager: ObservableObject {
         case .settingsSecondsSuffix: return "sec"
         case .settingsShowSpeedMenuBar: return "Show live speed in menu bar"
         case .settingsHideMenuBarIcon: return "Hide icon in menu bar"
-        case .settingsIncludeSystemDefault: return "Show system processes by default"
+        case .settingsIncludeSystemDefault: return "Show system processes"
         case .settingsLaunchAtLogin: return "Open at login (in background)"
         case .settingsStorageSection: return "Local Storage"
         case .settingsDatabasePath: return "Database Location"
@@ -327,8 +323,6 @@ public final class LanguageManager: ObservableObject {
         case .sidebarEditRange: return "Editar fechas"
 
         case .includeSystem: return "Procesos del sistema"
-        case .showSystemProcesses: return "Mostrar procesos del sistema"
-        case .hideSystemProcesses: return "Ocultar procesos del sistema"
         case .allAppsFilter: return "Todas las apps"
         case .clearFilter: return "Limpiar"
         case .filteredByApp: return "Filtrado:"
@@ -393,7 +387,7 @@ public final class LanguageManager: ObservableObject {
         case .settingsSecondsSuffix: return "seg"
         case .settingsShowSpeedMenuBar: return "Mostrar velocidad en la barra de menú"
         case .settingsHideMenuBarIcon: return "Ocultar ícono en la barra de menú"
-        case .settingsIncludeSystemDefault: return "Mostrar procesos del sistema por defecto"
+        case .settingsIncludeSystemDefault: return "Mostrar procesos del sistema"
         case .settingsLaunchAtLogin: return "Abrir al iniciar sesión (en segundo plano)"
         case .settingsStorageSection: return "Almacenamiento local"
         case .settingsDatabasePath: return "Ubicación de la base de datos"

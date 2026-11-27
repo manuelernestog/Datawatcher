@@ -26,8 +26,10 @@ struct AppListView: View {
                 Text(l10n.text(.clickToFilterHint))
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .layoutPriority(-1)
 
-                Spacer()
+                Spacer(minLength: 8)
 
                 HStack(spacing: 6) {
                     Image(systemName: "magnifyingglass")
@@ -49,7 +51,7 @@ struct AppListView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
-                .frame(width: 220)
+                .frame(width: 200)
                 .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: Capsule())
                 .overlay(
                     Capsule()

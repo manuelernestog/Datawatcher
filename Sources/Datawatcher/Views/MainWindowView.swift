@@ -22,7 +22,7 @@ struct MainWindowView: View {
             detailContent
         }
         .navigationSplitViewStyle(.balanced)
-        .frame(minWidth: 960, minHeight: 640)
+        .frame(minWidth: 1080, minHeight: 690)
         .sheet(isPresented: $showSettingsSheet) {
             SettingsView(monitor: monitor, viewModel: viewModel)
                 .environmentObject(l10n)
@@ -169,7 +169,7 @@ struct MainWindowView: View {
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 830, maxWidth: .infinity, minHeight: 620, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .navigationTitle(detailNavigationTitle)
         .navigationSubtitle(detailNavigationSubtitle)
@@ -180,19 +180,6 @@ struct MainWindowView: View {
 
     @ToolbarContentBuilder
     private var detailToolbar: some ToolbarContent {
-        ToolbarItem(placement: .primaryAction) {
-            Toggle(isOn: $viewModel.includeSystem) {
-                Label(l10n.text(.includeSystem), systemImage: "cpu")
-            }
-            .toggleStyle(.button)
-            .tint(viewModel.includeSystem ? .accentColor : nil)
-            .help(viewModel.includeSystem ? l10n.text(.hideSystemProcesses) : l10n.text(.showSystemProcesses))
-        }
-
-        if #available(macOS 26.0, *) {
-            ToolbarSpacer(.fixed, placement: .primaryAction)
-        }
-
         ToolbarItem(placement: .primaryAction) {
             Button {
                 monitor.togglePause()
@@ -221,27 +208,29 @@ struct MainWindowView: View {
     }
 
     private func activeFilterBanner(appName: String) -> some View {
-        HStack(spacing: 8) {
-            Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                .foregroundStyle(Color.accentColor)
-            Text("\(l10n.text(.filteredByApp)) \(appName)")
-                .font(.subheadline.weight(.medium))
-                .lineLimit(1)
+        HStack {
+            HStack(spacing: 7) {
+                Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                    .foregroundStyle(Color.accentColor)
+                Text("\(l10n.text(.filteredByApp)) \(appName)")
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
 
-            Button {
-                viewModel.clearAppFilter()
-            } label: {
-                Image(systemName: "xmark.circle.fill")
-                    .foregroundStyle(.secondary)
+                Button {
+                    viewModel.clearAppFilter()
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(l10n.text(.clearFilter))
             }
-            .buttonStyle(.plain)
-            .help(l10n.text(.clearFilter))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .modifier(ActiveFilterPillModifier())
 
             Spacer(minLength: 0)
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 7)
-        .modifier(ActiveFilterPillModifier())
     }
 
     // MARK: - KPI Cards
@@ -329,12 +318,12 @@ private struct ActiveFilterPillModifier: ViewModifier {
     func body(content: Content) -> some View {
         if #available(macOS 26.0, *) {
             content
-                .glassEffect(.regular.tint(Color.accentColor.opacity(0.16)).interactive(), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .glassEffect(.regular.tint(Color.accentColor.opacity(0.16)).interactive(), in: Capsule())
         } else {
             content
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .background(Color.accentColor.opacity(0.12), in: Capsule())
                 .overlay(
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    Capsule()
                         .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 0.5)
                 )
         }

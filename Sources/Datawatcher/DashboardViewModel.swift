@@ -42,6 +42,14 @@ final class DashboardViewModel: ObservableObject {
             }
             .store(in: &cancellables)
 
+        monitor.$includeSystemByDefault
+            .dropFirst()
+            .sink { [weak self] includeSys in
+                guard let self, self.includeSystem != includeSys else { return }
+                self.includeSystem = includeSys
+            }
+            .store(in: &cancellables)
+
         reloadData()
     }
 
