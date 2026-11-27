@@ -7,184 +7,130 @@ struct MainWindowView: View {
     @ObservedObject var monitor: NetworkMonitor
     @EnvironmentObject var l10n: LanguageManager
 
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var showCustomRangePopover = false
     @State private var draftStartDate = Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date()
     @State private var draftEndDate = Date()
     @State private var showSettingsSheet = false
 
+    private static let standardPresets: [DateRangePreset] = [.today, .week, .month, .year, .all]
+
     var body: some View {
-        VStack(spacing: 14) {
-            headerBar
-            filterBar
-            kpiGrid
-            ChartsSectionView(viewModel: viewModel, monitor: monitor)
-            AppListView(viewModel: viewModel)
-                .frame(maxHeight: .infinity)
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            sidebar
+        } detail: {
+            detailContent
         }
-        .padding(16)
-        .frame(minWidth: 920, minHeight: 620)
-        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationSplitViewStyle(.balanced)
+        .frame(minWidth: 960, minHeight: 640)
         .sheet(isPresented: $showSettingsSheet) {
             SettingsView(monitor: monitor, viewModel: viewModel)
                 .environmentObject(l10n)
         }
     }
 
-    // MARK: - Header Bar
+    // MARK: - Sidebar
 
-    private var headerBar: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 10) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 10, style: .continuous)
-                        .fill(
-                            LinearGradient(
-                                colors: [Color.cyan, Color.blue],
-                                startPoint: .topLeading,
-                                endPoint: .bottomTrailing
-                            )
-                        )
-                        .frame(width: 34, height: 34)
-                    Image(systemName: "arrow.up.arrow.down")
-                        .font(.system(size: 16, weight: .bold))
-                        .foregroundStyle(.white)
-                }
-
-                VStack(alignment: .leading, spacing: 1) {
-                    HStack(spacing: 8) {
-                        Text(l10n.text(.appName))
-                            .font(.title3.weight(.bold))
-
-                        HStack(spacing: 5) {
-                            Circle()
-                                .fill(monitor.isPaused ? Color.orange : Color.green)
-                                .frame(width: 7, height: 7)
-                            Text(monitor.isPaused ? l10n.text(.monitoringPaused) : l10n.text(.monitoringActive))
-                                .font(.caption2.weight(.semibold))
-                                .foregroundStyle(monitor.isPaused ? .orange : .green)
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background((monitor.isPaused ? Color.orange : Color.green).opacity(0.14), in: Capsule())
-                    }
-                }
-            }
-
-            Spacer()
-
-            // Pause / Resume
-            Button {
-                monitor.togglePause()
-            } label: {
-                Label(
-                    monitor.isPaused ? l10n.text(.resume) : l10n.text(.pause),
-                    systemImage: monitor.isPaused ? "play.fill" : "pause.fill"
-                )
-                .font(.subheadline.weight(.medium))
-            }
-            .buttonStyle(.bordered)
-
-            // Settings
-            Button {
-                showSettingsSheet = true
-            } label: {
-                Image(systemName: "gearshape")
-                    .font(.subheadline.weight(.medium))
-            }
-            .buttonStyle(.bordered)
-            .help(l10n.text(.settings))
-        }
-    }
-
-    // MARK: - Filter Bar
-
-    private var filterBar: some View {
-        HStack(spacing: 10) {
-            HStack(spacing: 4) {
-                ForEach([DateRangePreset.today, .week, .month, .year, .all], id: \.self) { preset in
-                    presetButton(preset)
-                }
-
-                Button {
+    private var sidebarSelection: Binding<DateRangePreset?> {
+        Binding(
+            get: { viewModel.selectedPreset },
+            set: { newValue in
+                guard let preset = newValue else { return }
+                viewModel.selectedPreset = preset
+                if preset == .custom {
                     draftStartDate = viewModel.customStartDate
                     draftEndDate = viewModel.customEndDate
-                    showCustomRangePopover.toggle()
-                } label: {
-                    HStack(spacing: 4) {
-                        Image(systemName: "calendar")
-                        Text(presetLabel(.custom))
-                    }
-                    .font(.subheadline.weight(.medium))
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 5)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(viewModel.selectedPreset == .custom ? Color.accentColor : Color.clear)
-                    )
-                    .foregroundStyle(viewModel.selectedPreset == .custom ? .white : .primary)
+                    showCustomRangePopover = true
                 }
-                .buttonStyle(.plain)
-                .popover(isPresented: $showCustomRangePopover, arrowEdge: .bottom) {
+            }
+        )
+    }
+
+    private var sidebar: some View {
+        List(selection: sidebarSelection) {
+            Section(l10n.text(.sidebarPeriodSection)) {
+                ForEach(Self.standardPresets, id: \.self) { preset in
+                    Label(presetLabel(preset), systemImage: presetIcon(preset))
+                        .tag(preset)
+                }
+
+                HStack(spacing: 6) {
+                    Label {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(presetLabel(.custom))
+                            if viewModel.selectedPreset == .custom {
+                                Text(formattedCustomRange)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                    } icon: {
+                        Image(systemName: presetIcon(.custom))
+                    }
+
+                    Spacer(minLength: 4)
+
+                    if viewModel.selectedPreset == .custom {
+                        Button {
+                            draftStartDate = viewModel.customStartDate
+                            draftEndDate = viewModel.customEndDate
+                            showCustomRangePopover.toggle()
+                        } label: {
+                            Image(systemName: "calendar")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.plain)
+                        .help(l10n.text(.sidebarEditRange))
+                    }
+                }
+                .tag(DateRangePreset.custom)
+                .popover(isPresented: $showCustomRangePopover, arrowEdge: .trailing) {
                     customRangePopover
                 }
             }
-            .padding(3)
-            .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-            .overlay(
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.08), lineWidth: 1)
-            )
-
-            if let appName = viewModel.selectedAppName {
-                HStack(spacing: 6) {
-                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                        .foregroundStyle(Color.accentColor)
-                    Text("\(l10n.text(.filteredByApp)) \(appName)")
-                        .font(.subheadline.weight(.medium))
-                        .lineLimit(1)
-                    Button {
-                        viewModel.clearAppFilter()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill")
-                            .foregroundStyle(.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(Color.accentColor.opacity(0.14), in: Capsule())
-                .overlay(
-                    Capsule().strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 1)
-                )
-            }
-
-            Spacer()
-
-            Toggle(isOn: $viewModel.includeSystem) {
-                Text(l10n.text(.includeSystem))
-                    .font(.subheadline)
-            }
-            .toggleStyle(.switch)
-            .controlSize(.small)
         }
+        .listStyle(.sidebar)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            sidebarStatusFooter
+        }
+        .navigationSplitViewColumnWidth(min: 195, ideal: 220, max: 255)
     }
 
-    private func presetButton(_ preset: DateRangePreset) -> some View {
-        let isActive = viewModel.selectedPreset == preset
-        return Button {
-            viewModel.selectedPreset = preset
-        } label: {
-            Text(presetLabel(preset))
-                .font(.subheadline.weight(.medium))
-                .padding(.horizontal, 10)
-                .padding(.vertical, 5)
-                .background(
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isActive ? Color.accentColor : Color.clear)
-                )
-                .foregroundStyle(isActive ? .white : .primary)
+    private var sidebarStatusFooter: some View {
+        VStack(spacing: 0) {
+            Divider()
+                .opacity(0.5)
+
+            HStack(spacing: 9) {
+                Circle()
+                    .fill(monitor.isPaused ? Color.orange : Color.green)
+                    .frame(width: 8, height: 8)
+                    .shadow(color: (monitor.isPaused ? Color.orange : Color.green).opacity(0.45), radius: 3)
+
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(monitor.isPaused ? l10n.text(.monitoringPaused) : l10n.text(.monitoringActive))
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(monitor.isPaused ? .orange : .primary)
+
+                    if monitor.isPaused {
+                        Text(l10n.text(.appName))
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Text("↓ \(ByteFormatter.formatCompactSpeed(monitor.totalLiveInPerSec))/s  ↑ \(ByteFormatter.formatCompactSpeed(monitor.totalLiveOutPerSec))/s")
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
         }
-        .buttonStyle(.plain)
     }
 
     private var customRangePopover: some View {
@@ -206,6 +152,96 @@ struct MainWindowView: View {
         }
         .padding(14)
         .frame(width: 260)
+    }
+
+    // MARK: - Detail Content
+
+    private var detailContent: some View {
+        VStack(spacing: 14) {
+            if let appName = viewModel.selectedAppName {
+                activeFilterBanner(appName: appName)
+            }
+
+            kpiGrid
+            ChartsSectionView(viewModel: viewModel, monitor: monitor)
+            AppListView(viewModel: viewModel)
+                .frame(minHeight: 220, maxHeight: .infinity)
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .navigationTitle(detailNavigationTitle)
+        .navigationSubtitle(detailNavigationSubtitle)
+        .toolbar {
+            detailToolbar
+        }
+    }
+
+    @ToolbarContentBuilder
+    private var detailToolbar: some ToolbarContent {
+        ToolbarItem(placement: .primaryAction) {
+            Toggle(isOn: $viewModel.includeSystem) {
+                Label(l10n.text(.includeSystem), systemImage: "cpu")
+            }
+            .toggleStyle(.button)
+            .tint(viewModel.includeSystem ? .accentColor : nil)
+            .help(viewModel.includeSystem ? l10n.text(.hideSystemProcesses) : l10n.text(.showSystemProcesses))
+        }
+
+        if #available(macOS 26.0, *) {
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                monitor.togglePause()
+            } label: {
+                Label(
+                    monitor.isPaused ? l10n.text(.resume) : l10n.text(.pause),
+                    systemImage: monitor.isPaused ? "play.fill" : "pause.fill"
+                )
+            }
+            .tint(monitor.isPaused ? .orange : nil)
+            .help(monitor.isPaused ? l10n.text(.resume) : l10n.text(.pause))
+        }
+
+        if #available(macOS 26.0, *) {
+            ToolbarSpacer(.fixed, placement: .primaryAction)
+        }
+
+        ToolbarItem(placement: .primaryAction) {
+            Button {
+                showSettingsSheet = true
+            } label: {
+                Label(l10n.text(.settings), systemImage: "gearshape")
+            }
+            .help(l10n.text(.settings))
+        }
+    }
+
+    private func activeFilterBanner(appName: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                .foregroundStyle(Color.accentColor)
+            Text("\(l10n.text(.filteredByApp)) \(appName)")
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+
+            Button {
+                viewModel.clearAppFilter()
+            } label: {
+                Image(systemName: "xmark.circle.fill")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.plain)
+            .help(l10n.text(.clearFilter))
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .modifier(ActiveFilterPillModifier())
     }
 
     // MARK: - KPI Cards
@@ -245,6 +281,27 @@ struct MainWindowView: View {
 
     // MARK: - Helpers
 
+    private var detailNavigationTitle: String {
+        if viewModel.selectedPreset == .custom {
+            return formattedCustomRange
+        }
+        return presetLabel(viewModel.selectedPreset)
+    }
+
+    private var detailNavigationSubtitle: String {
+        let status = monitor.isPaused ? l10n.text(.monitoringPaused) : l10n.text(.monitoringActive)
+        return "\(l10n.text(.appName)) • \(status)"
+    }
+
+    private var formattedCustomRange: String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        let start = formatter.string(from: min(viewModel.customStartDate, viewModel.customEndDate))
+        let end = formatter.string(from: max(viewModel.customStartDate, viewModel.customEndDate))
+        return "\(start) – \(end)"
+    }
+
     private func presetLabel(_ preset: DateRangePreset) -> String {
         switch preset {
         case .today: return l10n.text(.presetToday)
@@ -253,6 +310,33 @@ struct MainWindowView: View {
         case .year: return l10n.text(.presetYear)
         case .all: return l10n.text(.presetAll)
         case .custom: return l10n.text(.presetCustom)
+        }
+    }
+
+    private func presetIcon(_ preset: DateRangePreset) -> String {
+        switch preset {
+        case .today: return "clock"
+        case .week: return "calendar"
+        case .month: return "calendar.day.timeline.left"
+        case .year: return "chart.line.uptrend.xyaxis"
+        case .all: return "infinity"
+        case .custom: return "calendar.badge.plus"
+        }
+    }
+}
+
+private struct ActiveFilterPillModifier: ViewModifier {
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+                .glassEffect(.regular.tint(Color.accentColor.opacity(0.16)).interactive(), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        } else {
+            content
+                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.accentColor.opacity(0.3), lineWidth: 0.5)
+                )
         }
     }
 }
@@ -269,9 +353,9 @@ private struct KpiCardView: View {
             ZStack {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(tint.opacity(0.14))
-                    .frame(width: 40, height: 40)
+                    .frame(width: 38, height: 38)
                 Image(systemName: icon)
-                    .font(.system(size: 18, weight: .semibold))
+                    .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(tint)
             }
 
@@ -292,14 +376,14 @@ private struct KpiCardView: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, 14)
-        .padding(.vertical, 12)
+        .padding(.vertical, 11)
         .frame(maxWidth: .infinity)
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.7))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.65))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.primary.opacity(0.08), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
                 )
         )
     }

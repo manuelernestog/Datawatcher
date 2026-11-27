@@ -46,9 +46,13 @@ public enum L10nKey: CaseIterable, Sendable {
     case fromDate
     case toDate
     case applyRange
+    case sidebarPeriodSection
+    case sidebarEditRange
 
     // Filters & Controls
     case includeSystem
+    case showSystemProcesses
+    case hideSystemProcesses
     case allAppsFilter
     case clearFilter
     case filteredByApp
@@ -99,6 +103,8 @@ public enum L10nKey: CaseIterable, Sendable {
     case noAppsTitle
     case noAppsSubtitle
     case clickToFilterHint
+    case filterByApp
+    case showInFinder
 
     // Menu Bar Popover & Tray Menu
     case menuBarOpenDashboard
@@ -199,8 +205,12 @@ public final class LanguageManager: ObservableObject {
         case .fromDate: return "From"
         case .toDate: return "To"
         case .applyRange: return "Apply"
+        case .sidebarPeriodSection: return "Period"
+        case .sidebarEditRange: return "Edit Dates"
 
         case .includeSystem: return "System Processes"
+        case .showSystemProcesses: return "Show System Processes"
+        case .hideSystemProcesses: return "Hide System Processes"
         case .allAppsFilter: return "All Apps"
         case .clearFilter: return "Clear"
         case .filteredByApp: return "Filtered:"
@@ -248,6 +258,8 @@ public final class LanguageManager: ObservableObject {
         case .noAppsTitle: return "No matching applications"
         case .noAppsSubtitle: return "Adjust your date filter, search query, or wait for network activity."
         case .clickToFilterHint: return "Click an app to filter charts"
+        case .filterByApp: return "Filter Charts by App"
+        case .showInFinder: return "Show in Finder"
 
         case .menuBarOpenDashboard: return "Open Dashboard"
         case .menuBarQuit: return "Quit Datawatcher"
@@ -311,8 +323,12 @@ public final class LanguageManager: ObservableObject {
         case .fromDate: return "Desde"
         case .toDate: return "Hasta"
         case .applyRange: return "Aplicar"
+        case .sidebarPeriodSection: return "Período"
+        case .sidebarEditRange: return "Editar fechas"
 
         case .includeSystem: return "Procesos del sistema"
+        case .showSystemProcesses: return "Mostrar procesos del sistema"
+        case .hideSystemProcesses: return "Ocultar procesos del sistema"
         case .allAppsFilter: return "Todas las apps"
         case .clearFilter: return "Limpiar"
         case .filteredByApp: return "Filtrado:"
@@ -360,6 +376,8 @@ public final class LanguageManager: ObservableObject {
         case .noAppsTitle: return "Sin aplicaciones coincidentes"
         case .noAppsSubtitle: return "Ajusta el filtro de fechas, la búsqueda o espera actividad de red."
         case .clickToFilterHint: return "Haz clic en una app para filtrar los gráficos"
+        case .filterByApp: return "Filtrar gráficos por app"
+        case .showInFinder: return "Mostrar en Finder"
 
         case .menuBarOpenDashboard: return "Abrir panel principal"
         case .menuBarQuit: return "Salir de Datawatcher"

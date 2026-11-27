@@ -52,9 +52,9 @@ struct ChartsSectionView: View {
             trafficOverTimeCard
                 .frame(maxWidth: .infinity)
             rightChartCard
-                .frame(width: 370)
+                .frame(width: 345)
         }
-        .frame(height: 268)
+        .frame(height: 256)
     }
 
     // MARK: - Traffic Over Time Card
@@ -340,11 +340,11 @@ struct ChartsSectionView: View {
     }
 
     private var cardBackground: some View {
-        RoundedRectangle(cornerRadius: 14, style: .continuous)
-            .fill(Color(nsColor: .controlBackgroundColor).opacity(0.7))
+        RoundedRectangle(cornerRadius: 12, style: .continuous)
+            .fill(Color(nsColor: .controlBackgroundColor).opacity(0.65))
             .overlay(
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .strokeBorder(.primary.opacity(0.08), lineWidth: 1)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
             )
     }
 

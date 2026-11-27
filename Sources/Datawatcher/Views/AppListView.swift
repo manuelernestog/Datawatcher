@@ -50,10 +50,10 @@ struct AppListView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 5)
                 .frame(width: 220)
-                .background(Color(nsColor: .textBackgroundColor).opacity(0.6), in: RoundedRectangle(cornerRadius: 8))
+                .background(Color(nsColor: .textBackgroundColor).opacity(0.65), in: Capsule())
                 .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .strokeBorder(.primary.opacity(0.08), lineWidth: 1)
+                    Capsule()
+                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.6), lineWidth: 0.5)
                 )
 
                 Picker(l10n.text(.sortBy), selection: $viewModel.sortOrder) {
@@ -110,15 +110,35 @@ struct AppListView: View {
                 ScrollView {
                     LazyVStack(spacing: 2) {
                         ForEach(apps) { item in
+                            let isSelected = viewModel.selectedAppId == item.app.id
                             AppUsageRowView(
                                 summary: item,
                                 maxBytes: maxBytes,
-                                isSelected: viewModel.selectedAppId == item.app.id,
+                                isSelected: isSelected,
                                 systemBadgeText: l10n.text(.systemBadge)
                             )
                             .contentShape(Rectangle())
                             .onTapGesture {
                                 viewModel.toggleAppFilter(item.app)
+                            }
+                            .contextMenu {
+                                Button {
+                                    viewModel.toggleAppFilter(item.app)
+                                } label: {
+                                    Label(
+                                        isSelected ? l10n.text(.clearFilter) : l10n.text(.filterByApp),
+                                        systemImage: isSelected ? "xmark.circle" : "line.3.horizontal.decrease.circle"
+                                    )
+                                }
+
+                                if let appPath = item.app.appPath {
+                                    Divider()
+                                    Button {
+                                        NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: appPath)])
+                                    } label: {
+                                        Label(l10n.text(.showInFinder), systemImage: "folder")
+                                    }
+                                }
                             }
                         }
                     }
@@ -128,11 +148,11 @@ struct AppListView: View {
             }
         }
         .background(
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.7))
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(nsColor: .controlBackgroundColor).opacity(0.65))
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(.primary.opacity(0.08), lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .strokeBorder(Color(nsColor: .separatorColor).opacity(0.5), lineWidth: 0.5)
                 )
         )
     }
