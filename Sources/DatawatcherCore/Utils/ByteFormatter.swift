@@ -29,22 +29,29 @@ public enum ByteFormatter {
 
     /// Formats a transfer rate in bytes per second (e.g., `2.4 MB/s`, `0 B/s`).
     public static func formatSpeed(_ bytesPerSec: Double) -> String {
-        if bytesPerSec <= 0.5 { return "0 B/s" }
+        let (value, unit) = formatSpeedComponents(bytesPerSec)
+        return "\(value) \(unit)"
+    }
+
+    /// Formats a transfer rate into separate numeric value and unit strings (e.g., `("2.40", "MB/s")`).
+    public static func formatSpeedComponents(_ bytesPerSec: Double) -> (value: String, unit: String) {
+        if bytesPerSec <= 0.5 { return ("0", "B/s") }
         var unitIndex = 0
         var scaled = bytesPerSec
         while scaled >= 1024.0 && unitIndex < units.count - 1 {
             scaled /= 1024.0
             unitIndex += 1
         }
+        let unit = "\(units[unitIndex])/s"
         if unitIndex == 0 {
-            return String(format: "%.0f B/s", scaled)
+            return (String(format: "%.0f", scaled), unit)
         }
         if scaled >= 100 {
-            return String(format: "%.0f %@/s", scaled, units[unitIndex])
+            return (String(format: "%.0f", scaled), unit)
         } else if scaled >= 10 {
-            return String(format: "%.1f %@/s", scaled, units[unitIndex])
+            return (String(format: "%.1f", scaled), unit)
         } else {
-            return String(format: "%.2f %@/s", scaled, units[unitIndex])
+            return (String(format: "%.2f", scaled), unit)
         }
     }
 

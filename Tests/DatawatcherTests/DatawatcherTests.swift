@@ -281,6 +281,11 @@ struct DatawatcherTests {
 
         #expect(ByteFormatter.formatSpeed(0) == "0 B/s")
         #expect(ByteFormatter.formatSpeed(2048) == "2.00 KB/s")
+        #expect(ByteFormatter.formatSpeedComponents(0) == ("0", "B/s"))
+        #expect(ByteFormatter.formatSpeedComponents(512) == ("512", "B/s"))
+        #expect(ByteFormatter.formatSpeedComponents(2048) == ("2.00", "KB/s"))
+        #expect(ByteFormatter.formatSpeedComponents(15_360) == ("15.0", "KB/s"))
+        #expect(ByteFormatter.formatSpeedComponents(1_572_864) == ("1.50", "MB/s"))
         #expect(ByteFormatter.formatCompactSpeed(0) == "0B")
         #expect(ByteFormatter.formatCompactSpeed(1_572_864) == "1.5M")
 

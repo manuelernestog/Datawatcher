@@ -248,7 +248,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, NSPo
         let popover = NSPopover()
         popover.behavior = .transient
         popover.delegate = self
-        popover.contentSize = NSSize(width: 340, height: 420)
+        popover.contentSize = NSSize(width: 356, height: 440)
         let popoverView = MenuBarPopoverView(
             monitor: monitor,
             onOpenDashboard: { [weak self] in
